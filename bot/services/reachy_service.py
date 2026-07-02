@@ -79,6 +79,9 @@ class ReachyService:
         self.timeout = float(os.getenv("REACHY_TIMEOUT", "15.0"))
         self.retry_attempts = int(os.getenv("REACHY_RETRY_ATTEMPTS", "3"))
         self.startup_wait = float(os.getenv("REACHY_STARTUP_WAIT", "5.0"))
+        # The bot only drives motors through the daemon; camera/mic/speaker
+        # come from the WebRTC transport, so don't grab the robot's devices.
+        self.media_backend = os.getenv("REACHY_MEDIA_BACKEND", "no_media")
 
     @classmethod
     def get_instance(cls):
@@ -107,6 +110,7 @@ class ReachyService:
                     localhost_only=self.localhost_only,
                     timeout=self.timeout,
                     log_level=os.getenv("REACHY_LOG_LEVEL", "INFO"),
+                    media_backend=self.media_backend,
                 )
             except Exception as e:
                 err_msg = str(e).lower()

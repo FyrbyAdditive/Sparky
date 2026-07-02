@@ -36,6 +36,13 @@ AUDIO_STATS = {
 
 
 class ResilientAudioInput(LocalAudioInputTransport):
+    """Input with deep buffering, its own PortAudio instance, and a watchdog.
+
+    The stock 20ms buffers through the pipewire ALSA plugin stalled the
+    capture stream every ~10s on the Reachy's 16kHz device; 100ms buffers
+    and an unshared PyAudio instance keep it fed.
+    """
+
     def __init__(self, py_audio, params):
         super().__init__(py_audio, params)
         self._watchdog_task = None
@@ -45,10 +52,30 @@ class ResilientAudioInput(LocalAudioInputTransport):
         return super()._audio_in_callback(in_data, frame_count, time_info, status)
 
     async def start(self, frame: StartFrame):
-        await super().start(frame)
+        # Reimplemented (skipping LocalAudioInputTransport.start) to control
+        # frames_per_buffer; grandparent handles the base lifecycle.
+        await super(LocalAudioInputTransport, self).start(frame)
+        if self._in_stream:
+            return
+        self._sample_rate = self._params.audio_in_sample_rate or frame.audio_in_sample_rate
+        await asyncio.get_running_loop().run_in_executor(None, self._open)
         AUDIO_STATS["mic_last_frame_ts"] = time.time()
+        await self.set_transport_ready(frame)
         if self._watchdog_task is None:
             self._watchdog_task = self.create_task(self._watchdog())
+
+    def _open(self):
+        num_frames = int(self._sample_rate / 10)  # 100ms buffers
+        self._in_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=self._params.audio_in_channels,
+            rate=self._sample_rate,
+            frames_per_buffer=num_frames,
+            stream_callback=self._audio_in_callback,
+            input=True,
+            input_device_index=self._params.input_device_index,
+        )
+        self._in_stream.start_stream()
 
     async def _watchdog(self):
         while True:
@@ -71,17 +98,7 @@ class ResilientAudioInput(LocalAudioInputTransport):
                 old.close()
         except Exception:
             pass
-        num_frames = int(self._sample_rate / 100) * 2
-        self._in_stream = self._py_audio.open(
-            format=self._py_audio.get_format_from_width(2),
-            channels=self._params.audio_in_channels,
-            rate=self._sample_rate,
-            frames_per_buffer=num_frames,
-            stream_callback=self._audio_in_callback,
-            input=True,
-            input_device_index=self._params.input_device_index,
-        )
-        self._in_stream.start_stream()
+        self._open()
         logger.info("ResilientAudioInput: mic stream reopened")
 
 
@@ -129,7 +146,11 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
 class ResilientLocalAudioTransport(LocalAudioTransport):
     def input(self) -> FrameProcessor:
         if not self._input:
-            self._input = ResilientAudioInput(self._pyaudio, self._params)
+            import pyaudio
+
+            # Own PortAudio instance: sharing one across duplex streams via
+            # the pipewire plugin contributed to capture stalls.
+            self._input = ResilientAudioInput(pyaudio.PyAudio(), self._params)
         return self._input
 
     def output(self) -> FrameProcessor:

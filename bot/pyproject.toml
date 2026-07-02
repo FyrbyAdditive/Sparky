@@ -3,12 +3,12 @@ name = "bot"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiortc>=1.14.0",
     "onnxruntime>=1.23.2",
     "pipecat-ai-small-webrtc-prebuilt>=2.0.4",
-    "pipecat-ai[daily,local-smart-turn-v3]>=0.0.98",
+    "pipecat-ai[webrtc,nvidia,openai,silero,local-smart-turn,runner]>=1.4",
     "reachy-mini[mujoco]>=1.2.4",
     "reachy-mini-dances-library>=0.2.1",
     "transformers>=4.57.3",

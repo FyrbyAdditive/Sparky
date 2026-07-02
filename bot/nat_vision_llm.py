@@ -17,7 +17,7 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     UserImageRequestFrame,
     UserImageRawFrame,
-    StartInterruptionFrame,
+    InterruptionFrame,
     InputAudioRawFrame,
     UserSpeakingFrame,
     BotSpeakingFrame,
@@ -170,7 +170,7 @@ class NATVisionLLMService(NvidiaLLMService):
             logger.info(f"NATVisionLLMService.process_frame called with {type(frame).__name__}, direction={direction}")
         
         # Reset turn state on interruption (new user input)
-        if isinstance(frame, StartInterruptionFrame):
+        if isinstance(frame, InterruptionFrame):
             self._current_turn_has_image = False
         
         # Capture incoming images for later use

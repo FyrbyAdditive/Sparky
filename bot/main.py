@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: BSD 2-Clause License
 #
+# Local-offline fork: all speech and language services run on local hardware
+# (DGX Spark or LAN endpoints) — no cloud APIs, no API keys.
 
 
 import os
@@ -19,19 +21,17 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.observers.loggers.transcription_log_observer import TranscriptionLogObserver
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIObserver
-from pipecat.processors.transcript_processor import TranscriptProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
     create_transport,
     get_transport_client_id,
     maybe_capture_participant_camera,
 )
-from pipecat.services.elevenlabs.stt import ElevenLabsSTTService
-from pipecat.services.elevenlabs.tts import ElevenLabsHttpTTSService
+from pipecat.services.nvidia.stt import NvidiaSTTService
+from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
-from pipecat.transports.daily.transport import DailyParams
-import aiohttp
 
 from nat_vision_llm import NATVisionLLMService
 from services.reachy_service import ReachyService
@@ -45,12 +45,6 @@ load_dotenv(override=True)
 # instantiated. The function will be called when the desired transport gets
 # selected.
 transport_params = {
-    "daily": lambda: DailyParams(
-        audio_in_enabled=True,
-        audio_out_enabled=True,
-        video_in_enabled=True,
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
-    ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
@@ -63,96 +57,91 @@ transport_params = {
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info(f"Starting bot")
 
-    async with aiohttp.ClientSession() as session:
+    # Streaming ASR from a local Riva/NIM server (e.g. Parakeet NIM on a Spark).
+    # An empty model name selects the server's default model.
+    stt = NvidiaSTTService(
+        server=os.getenv("RIVA_SERVER", "localhost:50051"),
+        use_ssl=False,
+        model_function_map={"function_id": "", "model_name": os.getenv("RIVA_MODEL", "")},
+    )
 
-        stt = ElevenLabsSTTService(
-            api_key=os.getenv("ELEVENLABS_API_KEY"),
-            aiohttp_session=session,
-        )
+    # OpenAI-compatible TTS from a local Kokoro-FastAPI server.
+    tts = OpenAITTSService(
+        api_key="EMPTY",
+        base_url=os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1"),
+        model=os.getenv("KOKORO_MODEL", "kokoro"),
+        voice=os.getenv("KOKORO_VOICE", "af_heart"),
+    )
 
-        tts = ElevenLabsHttpTTSService(
-            api_key=os.getenv("ELEVENLABS_API_KEY", ""),
-            voice_id="JBFqnCBsd6RMkjVDRZzb",
-            aiohttp_session=session,
-        )
+    # The NAT router service (local), which fans out to local vLLM endpoints.
+    llm = NATVisionLLMService(
+        api_key="EMPTY",
+        base_url=os.getenv("NAT_BASE_URL", "http://localhost:8001/v1"),
+    )
 
-        llm = NATVisionLLMService(
-            api_key=os.getenv("NVIDIA_API_KEY"),
-            base_url="http://localhost:8001/v1",
-        )
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You are able to describe images from the user camera.",
+        },
+    ]
 
-        messages = [
+    context = LLMContext(messages)
+    context_aggregator = LLMContextAggregatorPair(context)
+    rtvi = RTVIProcessor()
+
+    pipeline = Pipeline(
+        [
+            transport.input(),  # Transport user input
+            rtvi,  # RTVI protocol processor
+            stt,  # STT
+            context_aggregator.user(),  # User responses
+            llm,  # LLM
+            tts,  # TTS
+            ReachyWobblerProcessor(),
+            transport.output(),  # Transport bot output
+            context_aggregator.assistant(),  # Assistant spoken responses
+        ]
+    )
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        ),
+        observers=[RTVIObserver(rtvi), TranscriptionLogObserver()],
+        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+    )
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client):
+        logger.info(f"Client connected")
+
+        await maybe_capture_participant_camera(transport, client)
+
+        client_id = get_transport_client_id(transport, client)
+
+        # Set the user_id for automatic image fetching
+        llm.set_user_id(client_id)
+
+        # Kick off the conversation.
+        messages.append(
             {
                 "role": "system",
-                "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You are able to describe images from the user camera.",
-            },
-        ]
-
-        context = LLMContext(messages)
-        context_aggregator = LLMContextAggregatorPair(context)
-        transcript = TranscriptProcessor()
-        rtvi = RTVIProcessor()
-
-        pipeline = Pipeline(
-            [
-                transport.input(),  # Transport user input
-                rtvi,  # RTVI protocol processor
-                stt,  # STT
-                transcript.user(),  # Capture user transcripts
-                context_aggregator.user(),  # User responses
-                llm,  # LLM
-                tts,  # TTS
-                ReachyWobblerProcessor(),
-                transport.output(),  # Transport bot output
-                transcript.assistant(),  # Capture assistant transcripts
-                context_aggregator.assistant(),  # Assistant spoken responses
-            ]
+                "content": f"Say hello!",
+            }
         )
+        await task.queue_frames([LLMRunFrame()])
 
-        task = PipelineTask(
-            pipeline,
-            params=PipelineParams(
-                enable_metrics=True,
-                enable_usage_metrics=True,
-            ),
-            observers=[RTVIObserver(rtvi)],
-            idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
-        )
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport, client):
+        logger.info(f"Client disconnected")
+        await task.cancel()
 
-        @transcript.event_handler("on_transcript_update")
-        async def handle_transcript_update(processor, frame):
-            """Handle transcript updates and send them to the web UI"""
-            for message in frame.messages:
-                logger.info(f"Transcript [{message.role}]: {message.content}")
+    runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
 
-        @transport.event_handler("on_client_connected")
-        async def on_client_connected(transport, client):
-            logger.info(f"Client connected")
-
-            await maybe_capture_participant_camera(transport, client)
-
-            client_id = get_transport_client_id(transport, client)
-            
-            # Set the user_id for automatic image fetching
-            llm.set_user_id(client_id)
-
-            # Kick off the conversation.
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Say hello!",
-                }
-            )
-            await task.queue_frames([LLMRunFrame()])
-
-        @transport.event_handler("on_client_disconnected")
-        async def on_client_disconnected(transport, client):
-            logger.info(f"Client disconnected")
-            await task.cancel()
-
-        runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
-
-        await runner.run(task)
+    await runner.run(task)
 
 
 async def bot(runner_args: RunnerArguments):

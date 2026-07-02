@@ -1,151 +1,132 @@
-# Reachy Mini Robot with NeMo Agent Toolkit Tutorial
+# Sparky — Fully-Offline Reachy Mini Personal Assistant on DGX Spark
 
-This tutorial showcases a real-time AI agent built with the **NVIDIA NeMo Agent Toolkit**, powered by **NVIDIA Nemotron models**, controlling a **Reachy Mini Robot**. The agent uses an intelligent LLM router to dynamically route between:
-- **Nemotron nano text** for text-based interactions
-- **Nemotron nano VLM** (Vision Language Model) for visual understanding
-- **REACT agent** for tool-based actions
+A real-time voice + vision AI assistant controlling a **Reachy Mini** robot, running
+**entirely on local hardware** — no cloud APIs, no API keys at runtime. Forked from
+[brevdev/reachy-personal-assistant](https://github.com/brevdev/reachy-personal-assistant)
+with every cloud service replaced by a local equivalent on one or two **NVIDIA DGX Sparks**:
 
-![Reachy Mini Robot Demo](ces_tutorial.png)
+| Capability | Original (cloud) | This fork (local) |
+|---|---|---|
+| Speech-to-text | ElevenLabs API | Riva Parakeet NIM (streaming, on Spark) |
+| Text-to-speech | ElevenLabs API | Kokoro-82M (Kokoro-FastAPI, on Spark) |
+| Agent + chat LLM | NVIDIA cloud (`nemotron-3-nano-30b-a3b`) | Same model, vLLM FP8 on Spark |
+| Vision LLM | NVIDIA cloud (`nemotron-nano-12b-v2-vl`) | Same model, vLLM FP8 on Spark |
+| Intent router | NVIDIA cloud (`phi-3-mini`) | Same model, vLLM on Spark |
+| Wikipedia tool | wikipedia.org | Offline txtai semantic index (~9GB) |
+| WebRTC transport | Daily (optional cloud) | Local small-webrtc only |
+
+The agent uses an intelligent LLM router to dynamically route between a chat model,
+a vision-language model, and a ReAct agent with tools. Model choices are **profile-based
+and swappable** (see `deploy/`) — including modern MoE/MTP upgrades and dual-Spark
+configurations over the 200GbE ConnectX-7 interconnect.
 
 ## Architecture
 
-The system consists of three main components running in parallel:
+Three components run in parallel on the *bot host* (a Spark with the robot on USB, or a
+Mac/Linux machine on the same LAN):
 
-1. **Reachy Mini Daemon** - Controls the robot hardware (or simulation)
-2. **Bot Service** - Processes vision and speech, coordinates robot actions
-3. **NeMo Agent Service** - Handles AI agent logic with intelligent routing between models
+1. **Reachy Mini Daemon** — controls the robot hardware (or MuJoCo simulation)
+2. **Bot Service** (pipecat) — WebRTC UI, VAD/turn-taking (local ONNX), streams STT/TTS,
+   drives robot motion (breathing, sway, speech wobble, animations)
+3. **NeMo Agent Service** (NAT) — router + ReAct agent, fans out to local vLLM endpoints
 
-![System Architecture](ces_tutorial_arch.png)
+All inference services run on the Spark(s) — see [deploy/README.md](deploy/README.md).
 
 ## Prerequisites
 
-- Python 3.10+
-- [uv](https://github.com/astral-sh/uv) package manager
-- NVIDIA API Key (for Nemotron models)
-- ElevenLabs API Key (for text-to-speech)
+- [uv](https://github.com/astral-sh/uv) package manager (bot host)
+- Python 3.13 (bot), 3.12+ (nat) — uv installs these automatically
+- One or two DGX Sparks running the inference stack (`deploy/`), or any
+  OpenAI-compatible + Riva endpoints on your LAN
+- One-time online setup to download models/containers; **runtime is fully offline**
 
-## Setup Instructions
+## Setup
 
-### 1. Clone and Navigate to Repository
+### 1. Bring up the inference stack on the Spark
+
+See [deploy/README.md](deploy/README.md). Verify health checks pass.
+
+### 2. Create the environment file
 
 ```bash
-cd /path/to/reachy-personal-assistant
+cp .env.template .env
+# Edit: point RIVA_SERVER, KOKORO_BASE_URL, *_LLM_BASE_URL at your Spark's IP.
+# Defaults assume everything runs on this machine.
 ```
 
-### 2. Create Environment File
-
-Create a `.env` file in the main directory with your API keys:
+### 3. Install services
 
 ```bash
-NVIDIA_API_KEY=your_nvidia_api_key_here
-ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
-```
-
-### 3. Setup Bot Service
-
-In a terminal window:
-
-```bash
-cd bot
-uv venv
-uv sync
-```
-
-### 4. Setup NeMo Agent Service
-
-In a separate terminal window:
-
-```bash
-cd nat
-uv venv
-uv sync
+(cd bot && uv sync)
+(cd nat && uv sync)
 ```
 
 ## Running the System
 
-You'll need **three terminal windows** running simultaneously.
+Three terminals on the bot host:
 
-### Terminal 1: Start Reachy Mini Daemon
+### Terminal 1: Reachy Mini Daemon
 
-Navigate to the `bot` directory and start the robot daemon:
-
-**For macOS:**
 ```bash
 cd bot
+# macOS simulation:
 uv run mjpython -m reachy_mini.daemon.app.main --sim --no-localhost-only
-```
-
-**For Linux:**
-```bash
-cd bot
+# Linux simulation:
 uv run -m reachy_mini.daemon.app.main --sim --no-localhost-only
+# Real robot (USB): drop --sim, and set REACHY_USE_SIM=false in .env
 ```
 
-*Note: The `--sim` flag runs the robot in simulation mode. Remove it if using actual hardware.*
-
-### Terminal 2: Start Bot Service
-
-In the `bot` directory:
+### Terminal 2: Bot Service
 
 ```bash
 cd bot
 uv run --env-file ../.env python main.py
 ```
 
-This service handles:
-- Vision processing through the robot's camera
-- Speech recognition and text-to-speech
-- Robot movement coordination
-- Emotional expression through dance moves
-
-### Terminal 3: Start NeMo Agent Service
-
-In the `nat` directory:
+### Terminal 3: NeMo Agent Service
 
 ```bash
 cd nat
 uv run --env-file ../.env nat serve --config_file src/ces_tutorial/config.yml --port 8001
 ```
 
-This launches the NeMo Agent Toolkit server with intelligent model routing capabilities.
+Then open the WebRTC UI printed by the bot service (default `http://localhost:7860`),
+allow mic/camera, and talk to the robot.
 
 ## How It Works
 
-1. **Vision & Audio Input**: The bot captures visual information and listens for speech
-2. **Agent Processing**: The NeMo Agent router intelligently selects the appropriate model:
-   - Text queries → Nemotron nano text model
-   - Visual queries → Nemotron nano VLM
-   - Action requests → REACT agent with tool calling
-3. **Robot Actions**: Based on the agent's response, the bot executes movements, expressions, or speaks
-
-## Demo
-
-Check out `ces_tutorial.mp4` to see the system in action!
+1. **Vision & Audio Input**: the bot captures camera frames and streams mic audio to
+   the local Riva Parakeet server for transcription
+2. **Agent Processing**: the NAT router selects the model per turn —
+   chit-chat → chat LLM · visual queries → vision LLM · actions/knowledge → ReAct agent
+   (with the offline Wikipedia tool)
+3. **Robot Actions**: responses are spoken through Kokoro TTS while the robot wobbles,
+   breathes, and plays expressive animations
 
 ## Project Structure
 
 ```
-reachy-personal-assistant/
-├── bot/                    # Robot control and vision/speech processing
-│   ├── main.py            # Main bot orchestration
-│   ├── nat_vision_llm.py  # Vision and LLM integration
-│   └── services/          # Robot services (moves, speech, etc.)
-├── nat/                    # NeMo Agent Toolkit configuration
+├── bot/                    # pipecat bot: WebRTC, speech, robot control
+│   ├── main.py             # pipeline wiring (STT → LLM → TTS → robot)
+│   ├── nat_vision_llm.py   # vision-aware LLM client for the NAT router
+│   └── services/           # robot motion, wobble, animations, daemon handling
+├── nat/                    # NeMo Agent Toolkit workflow
 │   └── src/ces_tutorial/
-│       ├── config.yml     # Agent configuration
-│       └── functions/     # Router and agent implementations
-└── .env                   # API keys (create this file)
+│       ├── config.yml      # router/agent config; all LLM endpoints env-driven
+│       └── functions/      # router, router_agent, offline wiki tool
+├── deploy/                 # DGX Spark inference stack (compose, profiles)
+└── .env.template           # all endpoints/settings (no API keys)
 ```
 
 ## Troubleshooting
 
-- **Port conflicts**: Ensure port 8001 is available for the NeMo Agent service
-- **API key errors**: Verify your `.env` file is properly formatted and contains valid keys
-- **Robot connection issues**: Check that the Reachy daemon started successfully before launching the bot service
+- **Service health**: run the curl checks in [deploy/README.md](deploy/README.md)
+- **Robot connection**: start the daemon before the bot service; the bot retries and
+  will run without the robot if unavailable. `REACHY_USE_SIM` must match how the
+  daemon was started
+- **Port conflicts**: NAT uses 8001; the WebRTC UI uses 7860
 
-## Resources
+## Upstream & Attribution
 
-- [NVIDIA NeMo Agent Toolkit](https://github.com/NVIDIA/NeMo-Agent-Toolkit)
-- [Reachy Mini Robot](https://www.pollen-robotics.com/)
-- [NVIDIA Nemotron Models](https://build.nvidia.com/)
-
+- Original tutorial: [brevdev/reachy-personal-assistant](https://github.com/brevdev/reachy-personal-assistant)
+- Animation assets and deployment patterns: see [THIRD_PARTY.md](THIRD_PARTY.md)

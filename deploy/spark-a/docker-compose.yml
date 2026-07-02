@@ -192,6 +192,22 @@ services:
       start_period: 2h
       start_interval: 10s
 
+  # HTTPS front for the bot UI (mic/camera need a secure context off-localhost).
+  # Put per-machine certs in ../tls/certs (magi.crt/magi.key — gitignored).
+  tls-proxy:
+    restart: unless-stopped
+    profiles: [ "parity", "unified", "split" ]
+    container_name: tls-proxy
+    image: nginx:alpine
+    network_mode: host
+    volumes:
+      - ../tls/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../tls/certs:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:443/ || exit 1"]
+      start_period: 1m
+      start_interval: 5s
+
 volumes:
   hf-cache:
   nim-cache:

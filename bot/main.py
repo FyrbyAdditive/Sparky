@@ -30,15 +30,15 @@ from pipecat.runner.utils import (
     maybe_capture_participant_camera,
 )
 from pipecat.services.nvidia.stt import NvidiaSTTService
-from pipecat.services.openai import tts as openai_tts
-from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
 from nat_vision_llm import NATVisionLLMService
 from services.emotion import EmotionReactorProcessor
+from services.kokoro_tts import KokoroTTSService
 from services.reachy_service import ReachyService
 from services.processor import ReachyWobblerProcessor
 from services.robot_api import start_robot_api
+from services.robot_camera import RobotCameraResponder
 
 
 load_dotenv(override=True)
@@ -71,16 +71,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         model_function_map={"function_id": "", "model_name": os.getenv("RIVA_MODEL", "")},
     )
 
-    # OpenAI-compatible TTS from a local Kokoro-FastAPI server. pipecat
-    # validates voice names against OpenAI's official list, so register the
-    # Kokoro voice to let it pass through to the server untouched.
-    kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
-    openai_tts.VALID_VOICES[kokoro_voice] = kokoro_voice
-    tts = OpenAITTSService(
+    # Streaming TTS from the local Kokoro-FastAPI server.
+    tts = KokoroTTSService(
         api_key="EMPTY",
         base_url=os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1"),
         model=os.getenv("KOKORO_MODEL", "kokoro"),
-        voice=kokoro_voice,
+        voice=os.getenv("KOKORO_VOICE", "af_heart"),
     )
 
     # The NAT router service (local), which fans out to local vLLM endpoints.
@@ -92,7 +88,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful LLM in a WebRTC call. Your goal is to demonstrate your capabilities in a succinct way. Your output will be spoken aloud, so avoid special characters that can't easily be spoken, such as emojis or bullet points. Respond to what the user said in a creative and helpful way. You are able to describe images from the user camera.",
+            "content": (
+                "You are Sparky, a small expressive robot assistant with a physical body: "
+                "a head that moves and two antennas. You run entirely on local hardware — "
+                "no cloud. Your replies are spoken aloud, so keep them short (one to three "
+                "sentences), natural and conversational. Never use emojis, bullet points or "
+                "special characters. Vary your phrasing; never repeat earlier sentences or "
+                "reintroduce yourself. Stay aware of the whole conversation and refer back "
+                "to things the user said. You can see through your camera when asked about "
+                "the surroundings, and you can move: nod, look around, wiggle your antennas."
+            ),
         },
     ]
 
@@ -100,9 +105,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     context_aggregator = LLMContextAggregatorPair(context)
     rtvi = RTVIProcessor()
 
+    # Vision source: the robot's own camera (bot co-located with robot) or
+    # the browser webcam (remote bot host, upstream-compatible default).
+    vision_source = os.getenv("VISION_SOURCE", "browser").strip().lower()
+    camera_stage = [RobotCameraResponder()] if vision_source == "robot" else []
+
     pipeline = Pipeline(
         [
             transport.input(),  # Transport user input
+            *camera_stage,  # Answer image requests from the robot camera
             rtvi,  # RTVI protocol processor
             stt,  # STT
             EmotionReactorProcessor(),  # React to user sentiment with animations

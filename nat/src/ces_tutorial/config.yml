@@ -47,7 +47,7 @@ llms:
       api_key: "EMPTY"
       base_url: ${AGENT_LLM_BASE_URL:-http://localhost:8010/v1}
       model_name: ${AGENT_LLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8}
-      temperature: 0.0
+      temperature: 0.6
       # ReAct traces need room; small defaults truncate and break parsing
       max_tokens: 2048
    chitchat_llm:
@@ -55,7 +55,8 @@ llms:
       api_key: "EMPTY"
       base_url: ${CHITCHAT_LLM_BASE_URL:-http://localhost:8010/v1}
       model_name: ${CHITCHAT_LLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8}
-      temperature: 0.0
+      # 0.0 made every reply near-identical; conversation needs variety
+      temperature: 0.7
       max_tokens: 512
    routing_llm:
       _type: openai
@@ -69,7 +70,7 @@ llms:
       api_key: "EMPTY"
       base_url: ${VISION_LLM_BASE_URL:-http://localhost:8020/v1}
       model_name: ${VISION_LLM_MODEL:-nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}
-      temperature: 0.0
+      temperature: 0.4
       max_tokens: 1024
 
 workflow:

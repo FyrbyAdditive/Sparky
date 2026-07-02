@@ -151,13 +151,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         # Set the user_id for automatic image fetching
         llm.set_user_id(client_id)
 
-        # Kick off the conversation.
-        messages.append(
-            {
-                "role": "system",
-                "content": f"Say hello!",
-            }
-        )
+        # Kick off the conversation. Strict chat templates (Qwen) only allow
+        # one system message at position 0, so fold the greeting instruction
+        # into the persona instead of appending a second system message.
+        messages[0]["content"] += " The user just connected: start by greeting them briefly."
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")

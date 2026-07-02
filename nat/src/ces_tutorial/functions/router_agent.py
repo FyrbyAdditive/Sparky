@@ -61,25 +61,35 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
         return content
     
     def _convert_to_langchain_messages(messages, redact_images=False):
-        """Convert OpenAI format messages to LangChain messages."""
-        langchain_messages = []
+        """Convert OpenAI format messages to LangChain messages.
+
+        All system messages are merged into a single one at the front —
+        strict chat templates (e.g. Qwen) 400 on system messages anywhere
+        but position 0.
+        """
+        system_parts = []
+        conversation = []
         for msg in messages:
             msg_dict = msg.model_dump() if hasattr(msg, 'model_dump') else dict(msg)
             role = msg_dict.get('role')
             content = msg_dict.get('content')
-            
+
             # Optionally redact images
             if redact_images:
                 content = _redact_images_from_content(content)
-            
-            # Create appropriate LangChain message based on role
+
             if role == 'system':
-                langchain_messages.append(SystemMessage(content=content))
+                if isinstance(content, str) and content:
+                    system_parts.append(content)
             elif role == 'user':
-                langchain_messages.append(HumanMessage(content=content))
+                conversation.append(HumanMessage(content=content))
             elif role == 'assistant':
-                langchain_messages.append(AIMessage(content=content))
-        
+                conversation.append(AIMessage(content=content))
+
+        langchain_messages = []
+        if system_parts:
+            langchain_messages.append(SystemMessage(content=" ".join(system_parts)))
+        langchain_messages.extend(conversation)
         return langchain_messages
     
     def _convert_to_nat_messages(messages, redact_images=True):

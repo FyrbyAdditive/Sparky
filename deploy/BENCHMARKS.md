@@ -53,3 +53,20 @@ nvidia/ModelOpt NVFP4 checkpoint crashes vLLM 26.05's MTP weight loader
 Tuning option: run the phi-3 router container alongside unified
 (COMPOSE_PROFILES=unified + start vllm-router) to get routing back to
 ~100ms and first-chunk under ~1s.
+
+## magi — final unified+router config (2026-07-02, late night)
+
+Qwen3.6-35B-A3B NVFP4 (RedHatAI) + MTP on eugr/spark-vllm-docker's
+vllm-node image with recipe tuning (FP8 KV, async sched, prefix caching),
+plus the dedicated phi-3 router re-enabled alongside (routing 100ms vs
+~600ms on the 35B):
+
+| metric | unified alone | unified + router |
+|---|---|---|
+| NAT first chunk (warm) | 1.33-1.42s | **0.91-0.94s** |
+| effective decode | ~43-45 tok/s (MTP acc 2.5-3.1/3) | same |
+| memory free | ~35GB | ~26GB |
+
+Recipe tuning verdict: no single-stream gain (build auto-selects
+FLASHINFER_CUTLASS for NVFP4 either way); prefix caching still helps long
+conversations. The router split is what moves perceived latency.

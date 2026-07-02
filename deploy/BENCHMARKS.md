@@ -70,3 +70,17 @@ plus the dedicated phi-3 router re-enabled alongside (routing 100ms vs
 Recipe tuning verdict: no single-stream gain (build auto-selects
 FLASHINFER_CUTLASS for NVFP4 either way); prefix caching still helps long
 conversations. The router split is what moves perceived latency.
+
+## Robot-native audio findings (2026-07-03)
+
+- Speech cutouts root cause 1: pipecat never reopens a dead PortAudio
+  stream (one host error -> permanent "Stream closed"). Fixed with the
+  self-healing transport (bot/services/local_audio.py).
+- Root cause 2: PipeWire's *capture* of the Reachy 16kHz USB device stalls
+  every ~10s (any buffering, EC or raw node), while raw ALSA capture never
+  failed. Final architecture: mic direct via ALSA/PortAudio, output via
+  PipeWire (volume control), ECHO_MODE=gate. PipeWire WebRTC AEC worked in
+  principle (barge-in) but rides the unstable capture path — revisit if
+  the mic array exposes a hardware-AEC channel or PipeWire fixes the stall.
+- Mic health after fix: frame age steady at 0.1s, zero watchdog reopens.
+- Panel gains volume slider (pactl on Reachy sink) + mic-flow telemetry.

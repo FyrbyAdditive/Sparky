@@ -1,48 +1,43 @@
 #!/usr/bin/env bash
 # One-time robot-audio setup on the bot host (idempotent).
-# Installs the pyaudio build dep, discovers the Reachy Mini audio device,
-# installs a PipeWire echo-cancel module targeting it, and makes the
-# echo-cancelled nodes the default source/sink for applications.
+#
+# Final architecture (learned the hard way — see deploy/BENCHMARKS.md):
+#   INPUT:  the bot captures the Reachy mic DIRECTLY via ALSA/PortAudio.
+#           PipeWire's capture of this 16kHz USB device stalls every ~10s
+#           regardless of buffering, while raw ALSA never failed once.
+#           The card is therefore set to an output-only PipeWire profile.
+#   OUTPUT: through PipeWire (stable; enables pactl volume control).
+#   ECHO:   ECHO_MODE=gate (mic dropped while the robot speaks). PipeWire
+#           WebRTC AEC was tried and works in principle but rides on the
+#           unstable capture path; revisit if barge-in becomes a must.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+echo "== dependencies"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev pulseaudio-utils
 
-echo "== dependencies (pyaudio build dep + pactl/wpctl tooling)"
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev pulseaudio-utils pipewire-audio-client-libraries 2>/dev/null \
-  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev pulseaudio-utils
+echo "== removing any previous echo-cancel config"
+rm -f ~/.config/pipewire/pipewire.conf.d/99-sparky-echo-cancel.conf
 
-echo "== discovering Reachy Mini audio nodes"
+echo "== discovering Reachy Mini audio card"
+CARD=$(pactl list short cards 2>/dev/null | grep -i reachy | awk '{print $2}' | head -1 || true)
 SINK=$(pactl list short sinks | grep -i reachy | awk '{print $2}' | head -1 || true)
-SOURCE=$(pactl list short sources | grep -i reachy | grep -v monitor | awk '{print $2}' | head -1 || true)
-if [ -z "$SINK" ] || [ -z "$SOURCE" ]; then
-  echo "!! Reachy Mini audio device not found (is the robot plugged in?)"
-  pactl list short sinks; pactl list short sources
-  exit 1
+if [ -z "$CARD" ]; then
+  echo "!! Reachy Mini audio card not found (is the robot plugged in?)"; exit 1
 fi
-echo "   sink:   $SINK"
-echo "   source: $SOURCE"
+echo "   card: $CARD"
 
-echo "== installing echo-cancel config"
-mkdir -p ~/.config/pipewire/pipewire.conf.d
-sed -e "s|@REACHY_SOURCE@|$SOURCE|" -e "s|@REACHY_SINK@|$SINK|" \
-  pipewire/99-sparky-echo-cancel.conf.template \
-  > ~/.config/pipewire/pipewire.conf.d/99-sparky-echo-cancel.conf
-
-echo "== restarting pipewire"
+echo "== pipewire: output-only profile (capture belongs to the bot, via raw ALSA)"
+pactl set-card-profile "$CARD" output:analog-stereo
 systemctl --user restart pipewire pipewire-pulse wireplumber
 sleep 3
-
-echo "== setting echo-cancelled nodes as defaults"
-EC_SINK_ID=$(wpctl status | grep -i "Sparky Echo-Cancelled Out" | grep -oE "^[ │*]*[0-9]+" | grep -oE "[0-9]+" | head -1 || true)
-EC_SOURCE_ID=$(wpctl status | grep -i "Sparky Echo-Cancelled Mic" | grep -oE "^[ │*]*[0-9]+" | grep -oE "[0-9]+" | head -1 || true)
-if [ -z "$EC_SINK_ID" ] || [ -z "$EC_SOURCE_ID" ]; then
-  echo "!! echo-cancel nodes did not appear; check: pw-cli ls Node | grep -i sparky"
-  exit 1
-fi
-wpctl set-default "$EC_SINK_ID"
-wpctl set-default "$EC_SOURCE_ID"
-echo "   defaults set (sink $EC_SINK_ID, source $EC_SOURCE_ID)"
+SINK=$(pactl list short sinks | grep -i reachy | awk '{print $2}' | head -1)
+pactl set-default-sink "$SINK"
+pactl set-sink-volume "$SINK" 100%
+pactl set-sink-mute "$SINK" 0
+echo "   default sink: $SINK @100%"
 
 echo
-echo "Done. Verify: pw-cli ls Node | grep -i sparky_ec"
-echo "The bot's pyaudio uses the default device, which now routes through AEC."
+echo "Done. Ensure .env has:"
+echo "  AUDIO_IN_DEVICE=Reachy Mini"
+echo "  AUDIO_OUT_DEVICE=pipewire"
+echo "  ECHO_MODE=gate"

@@ -118,6 +118,8 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
     def __init__(self, py_audio, params):
         super().__init__(py_audio, params)
         self._last_reopen = 0.0
+        self._last_write = 0.0
+        self._silence_task = None
 
     async def start(self, frame: StartFrame):
         # Reimplemented to deep-buffer the output: the default tiny buffer
@@ -128,6 +130,25 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
         self._sample_rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
         await asyncio.get_running_loop().run_in_executor(None, self._open)
         await self.set_transport_ready(frame)
+        if self._silence_task is None:
+            # An open-but-idle stream underruns; through the pipewire ALSA
+            # plugin that replays stale buffer fragments as periodic noise
+            # bursts. Keep the stream fed with silence between utterances.
+            self._silence_task = self.create_task(self._silence_feeder())
+
+    async def _silence_feeder(self):
+        chunk_secs = 0.08
+        silence = b"\x00" * int(2 * chunk_secs * (self._sample_rate or 24000))
+        while True:
+            await asyncio.sleep(chunk_secs / 2)
+            if self._out_stream and (time.monotonic() - self._last_write) > chunk_secs:
+                self._last_write = time.monotonic()
+                try:
+                    await self.get_event_loop().run_in_executor(
+                        self._executor, self._out_stream.write, silence
+                    )
+                except Exception:
+                    pass  # real writes handle reopen
 
     def _open(self):
         self._out_stream = self._py_audio.open(
@@ -141,6 +162,7 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
         self._out_stream.start_stream()
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        self._last_write = time.monotonic()
         try:
             return await super().write_audio_frame(frame)
         except Exception as e:

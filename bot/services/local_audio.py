@@ -34,6 +34,16 @@ AUDIO_STATS = {
     "out_write_errors": 0,
 }
 
+# Shared gate state, written by MicGateProcessor. The capture callback zeroes
+# audio while gated so the robot's own speech never reaches the transport's
+# VAD (frame-dropping later in the pipeline is too late — VAD runs in the
+# transport and its UserStartedSpeaking would interrupt the reply mid-word).
+GATE = {"bot_speaking": False, "tail_until": 0.0, "muted": False}
+
+
+def gate_active() -> bool:
+    return GATE["muted"] or GATE["bot_speaking"] or time.monotonic() < GATE["tail_until"]
+
 
 class ResilientAudioInput(LocalAudioInputTransport):
     """Input with deep buffering, its own PortAudio instance, and a watchdog.
@@ -49,6 +59,8 @@ class ResilientAudioInput(LocalAudioInputTransport):
 
     def _audio_in_callback(self, in_data, frame_count, time_info, status):
         AUDIO_STATS["mic_last_frame_ts"] = time.time()
+        if gate_active():
+            in_data = b"\x00" * len(in_data)
         return super()._audio_in_callback(in_data, frame_count, time_info, status)
 
     async def start(self, frame: StartFrame):
@@ -107,6 +119,27 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
         super().__init__(py_audio, params)
         self._last_reopen = 0.0
 
+    async def start(self, frame: StartFrame):
+        # Reimplemented to deep-buffer the output: the default tiny buffer
+        # underruns audibly (rapid stutter) at the start of each utterance.
+        await super(LocalAudioOutputTransport, self).start(frame)
+        if self._out_stream:
+            return
+        self._sample_rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
+        await asyncio.get_running_loop().run_in_executor(None, self._open)
+        await self.set_transport_ready(frame)
+
+    def _open(self):
+        self._out_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=self._params.audio_out_channels,
+            rate=self._sample_rate,
+            frames_per_buffer=int(self._sample_rate / 10),  # 100ms
+            output=True,
+            output_device_index=self._params.output_device_index,
+        )
+        self._out_stream.start_stream()
+
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         try:
             return await super().write_audio_frame(frame)
@@ -132,14 +165,7 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
                 old.close()
         except Exception:
             pass
-        self._out_stream = self._py_audio.open(
-            format=self._py_audio.get_format_from_width(2),
-            channels=self._params.audio_out_channels,
-            rate=self._sample_rate,
-            output=True,
-            output_device_index=self._params.output_device_index,
-        )
-        self._out_stream.start_stream()
+        self._open()
         logger.info("ResilientAudioOutput: output stream reopened")
 
 

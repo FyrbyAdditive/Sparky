@@ -1,0 +1,10 @@
+# ConnectX-7 direct link between the Sparks (install as
+# /etc/netplan/99-sparky-interconnect.yaml; set the address per machine:
+# magi = 192.168.100.1/24, shodan = 192.168.100.2/24).
+network:
+  version: 2
+  ethernets:
+    enp1s0f1np1:
+      mtu: 9000
+      addresses:
+        - 192.168.100.1/24

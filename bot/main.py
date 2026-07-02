@@ -34,6 +34,7 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
 from nat_vision_llm import NATVisionLLMService
+from services.emotion import EmotionReactorProcessor
 from services.reachy_service import ReachyService
 from services.processor import ReachyWobblerProcessor
 
@@ -95,6 +96,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             transport.input(),  # Transport user input
             rtvi,  # RTVI protocol processor
             stt,  # STT
+            EmotionReactorProcessor(),  # React to user sentiment with animations
             context_aggregator.user(),  # User responses
             llm,  # LLM
             tts,  # TTS

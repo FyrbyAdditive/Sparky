@@ -9,6 +9,10 @@
 context.modules = [
   { name = libpipewire-module-echo-cancel
     args = {
+      # Run at the Reachy device's native rate — resampling a 16kHz USB
+      # device into the 48kHz graph repeatedly stalled its capture node.
+      audio.rate = 16000
+      audio.channels = 1
       capture.props = {
         node.name = "sparky_ec_capture"
         target.object = "@REACHY_SOURCE@"

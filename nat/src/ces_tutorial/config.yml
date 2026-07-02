@@ -5,9 +5,10 @@ general:
 
 functions:
    wikipedia_search:
-      _type: wiki_search
+      _type: wiki_search_offline
+      base_url: ${WIKI_BASE_URL:-http://localhost:8040}
       max_results: 2
-      
+
    router:
       _type: router
       route_config:
@@ -28,28 +29,44 @@ functions:
       parse_agent_response_max_retries: 3
       tool_names: [wikipedia_search]
 
+# All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
+# model names come from the environment so model profiles can swap them
+# without code changes. api_key is unused by local servers but the OpenAI
+# client requires a non-empty string.
 llms:
-   # Tell NeMo Agent Toolkit which LLM to use for the agent
    agent_llm:
-      _type: nim
-      model_name: nvidia/nemotron-3-nano-30b-a3b
-      temperature: 0.0 
+      _type: openai
+      api_key: "EMPTY"
+      base_url: ${AGENT_LLM_BASE_URL:-http://localhost:8010/v1}
+      model_name: ${AGENT_LLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8}
+      temperature: 0.0
+      # ReAct traces need room; small defaults truncate and break parsing
+      max_tokens: 2048
    chitchat_llm:
-      _type: nim
-      model_name: nvidia/nemotron-3-nano-30b-a3b
+      _type: openai
+      api_key: "EMPTY"
+      base_url: ${CHITCHAT_LLM_BASE_URL:-http://localhost:8010/v1}
+      model_name: ${CHITCHAT_LLM_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8}
       temperature: 0.0
-   routing_llm: 
-      _type: nim
-      model_name: microsoft/phi-3-mini-128k-instruct
+      max_tokens: 512
+   routing_llm:
+      _type: openai
+      api_key: "EMPTY"
+      base_url: ${ROUTER_LLM_BASE_URL:-http://localhost:8030/v1}
+      model_name: ${ROUTER_LLM_MODEL:-microsoft/Phi-3-mini-128k-instruct}
       temperature: 0.0
+      max_tokens: 128
    image_llm:
-      _type: nim
-      model_name: nvidia/nemotron-nano-12b-v2-vl
+      _type: openai
+      api_key: "EMPTY"
+      base_url: ${VISION_LLM_BASE_URL:-http://localhost:8020/v1}
+      model_name: ${VISION_LLM_MODEL:-nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}
       temperature: 0.0
+      max_tokens: 1024
 
 workflow:
    _type: ces_tutorial_router_agent
    agent: react_agent
-   router: router 
+   router: router
    chitchat_llm: chitchat_llm
    image_llm: image_llm

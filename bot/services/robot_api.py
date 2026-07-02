@@ -1,16 +1,26 @@
-"""Tiny HTTP control API for the robot, consumed by NAT agent tools.
+"""Control panel + robot control API.
 
-Runs inside the bot process (daemon thread, own event loop) so the ReAct
-agent can deliberately gesture: the NAT functions `play_animation` /
-`look_at` call these endpoints. Binds to localhost by default; set
-ROBOT_API_HOST=0.0.0.0 if the NAT server runs on another machine.
+Runs inside the bot process (daemon thread, own event loop) and serves:
+- the control panel single-page UI (GET /)
+- typed conversation turns (POST /say) and verbatim speech (POST /speak)
+- mic mute (POST /mute), live transcript (WS /ws), status (GET /status)
+- robot actions used by the NAT agent tools (POST /robot/*)
+
+The pipeline side registers itself via attach_session(); handlers inject
+frames into the pipeline's event loop with run_coroutine_threadsafe.
+Binds to localhost; the nginx TLS proxy fronts it at https://<host>/.
 """
 
+import asyncio
+import collections
 import logging
 import os
 import threading
+from pathlib import Path
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .reachy_service import ReachyService
@@ -19,6 +29,51 @@ logger = logging.getLogger(__name__)
 
 _started = False
 _lock = threading.Lock()
+
+# Set by attach_session() once the pipeline exists
+_session = {"loop": None, "task": None, "messages": None, "mic_gate": None}
+
+# Transcript fan-out (owned by the API server's event loop)
+_api_loop: asyncio.AbstractEventLoop | None = None
+_history: collections.deque = collections.deque(maxlen=200)
+_ws_queues: set = set()
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
+def attach_session(loop, task, messages, mic_gate):
+    """Called from the bot once the pipeline is built."""
+    _session.update(loop=loop, task=task, messages=messages, mic_gate=mic_gate)
+    logger.info("Control panel: session attached")
+
+
+def push_transcript(item: dict):
+    """Thread-safe transcript push (called from the pipeline loop)."""
+    if _api_loop is None:
+        return
+    _api_loop.call_soon_threadsafe(_broadcast, item)
+
+
+def _broadcast(item: dict):
+    _history.append(item)
+    for q in list(_ws_queues):
+        q.put_nowait(item)
+
+
+def _queue_frames(frames) -> bool:
+    loop, task = _session["loop"], _session["task"]
+    if loop is None or task is None:
+        return False
+    asyncio.run_coroutine_threadsafe(task.queue_frames(frames), loop)
+    return True
+
+
+class TextRequest(BaseModel):
+    text: str
+
+
+class MuteRequest(BaseModel):
+    muted: bool
 
 
 class PlayAnimationRequest(BaseModel):
@@ -30,8 +85,113 @@ class LookAtRequest(BaseModel):
 
 
 def _build_app() -> FastAPI:
-    app = FastAPI(title="sparky-robot-api")
+    from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
+
+    app = FastAPI(title="sparky-panel")
     service = ReachyService.get_instance()
+
+    @app.get("/")
+    def index():
+        return FileResponse(STATIC_DIR / "panel.html")
+
+    @app.post("/say")
+    def say(req: TextRequest):
+        text = req.text.strip()
+        if not text:
+            return {"ok": False, "error": "empty"}
+        messages = _session["messages"]
+        if messages is None:
+            return {"ok": False, "error": "no_session"}
+        messages.append({"role": "user", "content": text})
+        ok = _queue_frames([LLMRunFrame()])
+        if ok:
+            push_transcript({"role": "user", "text": f"{text}  (typed)"})
+        return {"ok": ok}
+
+    @app.post("/speak")
+    def speak(req: TextRequest):
+        text = req.text.strip()
+        if not text:
+            return {"ok": False, "error": "empty"}
+        ok = _queue_frames([TTSSpeakFrame(text)])
+        return {"ok": ok}
+
+    @app.post("/mute")
+    def mute(req: MuteRequest):
+        gate = _session["mic_gate"]
+        if gate is None:
+            return {"ok": False, "error": "no_session"}
+        gate.set_muted(req.muted)
+        return {"ok": True, "muted": req.muted}
+
+    @app.get("/status")
+    async def status():
+        def health_targets():
+            targets = {}
+            nat = os.getenv("NAT_BASE_URL", "http://localhost:8001/v1").removesuffix("/v1")
+            targets["nat"] = f"{nat}/docs"
+            for role, env in [("agent-llm", "AGENT_LLM_BASE_URL"),
+                              ("router-llm", "ROUTER_LLM_BASE_URL"),
+                              ("vision-llm", "VISION_LLM_BASE_URL")]:
+                base = os.getenv(env)
+                if base:
+                    targets[role] = base.removesuffix("/v1") + "/health"
+            kokoro = os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1").removesuffix("/v1")
+            targets["tts"] = f"{kokoro}/v1/models"
+            riva_host = os.getenv("RIVA_SERVER", "localhost:50051").split(":")[0]
+            targets["stt"] = f"http://{riva_host}:9000/v1/health/ready"
+            wiki = os.getenv("WIKI_BASE_URL")
+            if wiki:
+                targets["wiki"] = f"{wiki.rstrip('/')}/health"
+            return targets
+
+        # de-duplicate identical URLs (unified profile points several roles at one engine)
+        targets = health_targets()
+        unique = {}
+        for name, url in targets.items():
+            unique.setdefault(url, []).append(name)
+
+        results = {}
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            async def check(url, names):
+                try:
+                    r = await client.get(url)
+                    ok = r.status_code == 200
+                except Exception:
+                    ok = False
+                for n in names:
+                    results[n] = ok
+            await asyncio.gather(*(check(u, ns) for u, ns in unique.items()))
+
+        gate = _session["mic_gate"]
+        return {
+            "services": results,
+            "robot_connected": service.connected,
+            "muted": bool(gate.muted) if gate else False,
+            "session_active": _session["task"] is not None,
+            "models": {
+                "agent": os.getenv("AGENT_LLM_MODEL", "?"),
+                "router": os.getenv("ROUTER_LLM_MODEL", "?"),
+                "vision": os.getenv("VISION_LLM_MODEL", "?"),
+            },
+        }
+
+    @app.websocket("/ws")
+    async def ws(websocket: WebSocket):
+        await websocket.accept()
+        q: asyncio.Queue = asyncio.Queue()
+        _ws_queues.add(q)
+        try:
+            await websocket.send_json({"type": "history", "items": list(_history)})
+            while True:
+                item = await q.get()
+                await websocket.send_json({"type": "transcript", "item": item})
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            _ws_queues.discard(q)
+
+    # --- robot actions (also used by the NAT agent tools) ---
 
     @app.get("/robot/animations")
     def animations():
@@ -63,7 +223,7 @@ def _build_app() -> FastAPI:
 
 
 def start_robot_api():
-    """Start the robot control API once, in a background daemon thread."""
+    """Start the panel/API server once, in a background daemon thread."""
     global _started
     with _lock:
         if _started:
@@ -74,9 +234,15 @@ def start_robot_api():
     port = int(os.getenv("ROBOT_API_PORT", "7861"))
 
     def _serve():
+        global _api_loop
         import uvicorn
 
-        uvicorn.run(_build_app(), host=host, port=port, log_level="warning")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _api_loop = loop
+        config = uvicorn.Config(_build_app(), host=host, port=port, log_level="warning", loop="asyncio")
+        server = uvicorn.Server(config)
+        loop.run_until_complete(server.serve())
 
     threading.Thread(target=_serve, daemon=True, name="robot-api").start()
-    logger.info(f"Robot control API listening on http://{host}:{port}")
+    logger.info(f"Control panel listening on http://{host}:{port}")

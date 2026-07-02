@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparky Control</title>
+<style>
+  :root { --bg:#0f1216; --card:#181d24; --line:#2a323d; --text:#e6ebf0; --dim:#8a97a5;
+          --accent:#4da3ff; --ok:#3ecf8e; --bad:#ff6b6b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,sans-serif;
+         display:flex; flex-direction:column; height:100vh; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+           border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:16px; font-weight:600; margin-right:8px; }
+  .chip { font-size:12px; padding:3px 9px; border-radius:99px; background:var(--card);
+          border:1px solid var(--line); color:var(--dim); }
+  .chip.ok { color:var(--ok); border-color:var(--ok); }
+  .chip.bad { color:var(--bad); border-color:var(--bad); }
+  main { display:flex; flex:1; min-height:0; }
+  #left { flex:2; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--line); }
+  #transcript { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:82%; padding:8px 12px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
+  .msg.user { align-self:flex-end; background:#1d3a5f; }
+  .msg.assistant { align-self:flex-start; background:var(--card); }
+  .msg .who { font-size:11px; color:var(--dim); margin-bottom:2px; }
+  #inputs { padding:12px 16px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+  .row { display:flex; gap:8px; }
+  input[type=text] { flex:1; background:var(--card); border:1px solid var(--line); color:var(--text);
+          border-radius:8px; padding:9px 12px; font-size:15px; }
+  input[type=text]:focus { outline:none; border-color:var(--accent); }
+  button { background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:8px;
+           padding:8px 14px; font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#08111c; font-weight:600; }
+  #right { flex:1; min-width:280px; max-width:380px; overflow-y:auto; padding:16px; display:flex;
+           flex-direction:column; gap:16px; }
+  section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:8px; }
+  #anims { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:6px; }
+  #anims button { font-size:12.5px; padding:7px 4px; }
+  #dpad { display:grid; grid-template-columns:repeat(3,52px); grid-template-rows:repeat(3,40px); gap:6px;
+          justify-content:center; }
+  #dpad button { padding:0; }
+  #dpad .blank { visibility:hidden; }
+  #muteBtn.muted { background:var(--bad); border-color:var(--bad); color:#fff; }
+  #services { display:flex; flex-wrap:wrap; gap:6px; }
+  #models { font-size:12px; color:var(--dim); margin-top:6px; word-break:break-all; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 Sparky</h1>
+  <span id="robotChip" class="chip">robot: …</span>
+  <span id="sessionChip" class="chip">session: …</span>
+  <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
+</header>
+<main>
+  <div id="left">
+    <div id="transcript"></div>
+    <div id="inputs">
+      <div class="row">
+        <input id="chatText" type="text" placeholder="Type to Sparky (goes through the assistant)…">
+        <button class="primary" onclick="sendChat()">Send</button>
+      </div>
+      <div class="row">
+        <input id="speakText" type="text" placeholder="Speak verbatim (no LLM)…">
+        <button onclick="sendSpeak()">Speak</button>
+      </div>
+    </div>
+  </div>
+  <div id="right">
+    <section>
+      <h2>Look</h2>
+      <div id="dpad">
+        <span class="blank"></span><button onclick="look('up')">▲</button><span class="blank"></span>
+        <button onclick="look('left')">◀</button><button onclick="look('front')">●</button><button onclick="look('right')">▶</button>
+        <span class="blank"></span><button onclick="look('down')">▼</button><span class="blank"></span>
+      </div>
+    </section>
+    <section>
+      <h2>Animations</h2>
+      <div id="anims"></div>
+    </section>
+    <section>
+      <h2>Services</h2>
+      <div id="services"></div>
+      <div id="models"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let muted = false;
+
+function addMsg(item) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (item.role === 'user' ? 'user' : 'assistant');
+  div.innerHTML = '<div class="who">' + (item.role === 'user' ? 'you' : 'sparky') + '</div>';
+  div.appendChild(document.createTextNode(item.text));
+  const t = $('transcript');
+  t.appendChild(div);
+  t.scrollTop = t.scrollHeight;
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(proto + '//' + location.host + location.pathname.replace(/\/$/, '') + '/ws');
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'history') { $('transcript').innerHTML = ''; m.items.forEach(addMsg); }
+    else if (m.type === 'transcript') addMsg(m.item);
+  };
+  ws.onclose = () => setTimeout(connectWS, 2000);
+}
+
+async function post(path, body) {
+  const r = await fetch(path.replace(/^\//, ''), { method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+
+function sendChat() {
+  const v = $('chatText').value.trim();
+  if (!v) return;
+  post('/say', {text: v});
+  $('chatText').value = '';
+}
+function sendSpeak() {
+  const v = $('speakText').value.trim();
+  if (!v) return;
+  post('/speak', {text: v});
+  $('speakText').value = '';
+}
+function look(direction) { post('/robot/look_at', {direction}); }
+function play(name) { post('/robot/play_animation', {name}); }
+
+$('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+$('speakText').addEventListener('keydown', e => { if (e.key === 'Enter') sendSpeak(); });
+$('muteBtn').onclick = async () => {
+  muted = !muted;
+  await post('/mute', {muted});
+  $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
+  $('muteBtn').classList.toggle('muted', muted);
+};
+
+async function loadAnimations() {
+  const r = await fetch('robot/animations').then(r => r.json());
+  $('anims').innerHTML = '';
+  (r.animations || []).forEach(name => {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = () => play(name);
+    $('anims').appendChild(b);
+  });
+}
+
+async function refreshStatus() {
+  try {
+    const s = await fetch('status').then(r => r.json());
+    $('robotChip').textContent = 'robot: ' + (s.robot_connected ? 'connected' : 'offline');
+    $('robotChip').className = 'chip ' + (s.robot_connected ? 'ok' : 'bad');
+    $('sessionChip').textContent = 'session: ' + (s.session_active ? 'live' : 'starting');
+    $('sessionChip').className = 'chip ' + (s.session_active ? 'ok' : 'bad');
+    const sv = $('services'); sv.innerHTML = '';
+    Object.entries(s.services || {}).forEach(([name, ok]) => {
+      const c = document.createElement('span');
+      c.className = 'chip ' + (ok ? 'ok' : 'bad');
+      c.textContent = name;
+      sv.appendChild(c);
+    });
+    $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
+    if (s.muted !== muted) {
+      muted = s.muted;
+      $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
+      $('muteBtn').classList.toggle('muted', muted);
+    }
+  } catch (e) { /* panel keeps trying */ }
+}
+
+connectWS();
+loadAnimations();
+refreshStatus();
+setInterval(refreshStatus, 10000);
+</script>
+</body>
+</html>

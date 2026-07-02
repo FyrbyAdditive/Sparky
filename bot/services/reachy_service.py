@@ -6,6 +6,7 @@ from reachy_mini import ReachyMini
 from .moves import MovementManager
 from .wobbler import HeadWobbler
 from .dance_emotion_moves import GotoQueueMove
+from .animation_player import AnimationLibrary, AnimationQueueMove
 from reachy_mini.utils import create_head_pose
 
 try:
@@ -66,6 +67,7 @@ class ReachyService:
         self.motion_manager = None
         self.wobbler = None
         self.connected = False
+        self.animations = AnimationLibrary()
 
         # All connection behavior is env-driven so the same code runs against
         # the MuJoCo sim (default), a USB-attached robot, or a daemon reachable
@@ -215,6 +217,40 @@ class ReachyService:
             logger.info(f"Reachy looking {direction}")
         except Exception as e:
             logger.error(f"Look at failed: {e}")
+
+    def list_animations(self) -> list:
+        """Names of the available expressive animation clips."""
+        return self.animations.names()
+
+    def play_animation(self, name: str) -> bool:
+        """Queue an expressive animation clip (e.g. nod, attentive, intrigued5).
+
+        Returns True if the clip was queued.
+        """
+        clip = self.animations.get(name)
+        if clip is None:
+            logger.warning(f"Unknown animation '{name}' (available: {', '.join(self.list_animations())})")
+            return False
+
+        if not self.connected or not self.motion_manager or not self.robot:
+            logger.debug(f"Reachy not connected - ignoring play_animation({name})")
+            return False
+
+        try:
+            current_head_pose = self.robot.get_current_head_pose()
+            _, current_antennas = self.robot.get_current_joint_positions()
+            move = AnimationQueueMove(
+                clip,
+                start_head_pose=current_head_pose,
+                start_antennas=(current_antennas[0], current_antennas[1]),
+            )
+            self.motion_manager.queue_move(move)
+            self.motion_manager.set_moving_state(1.0)
+            logger.info(f"Reachy playing animation '{name}' ({clip.duration:.1f}s)")
+            return True
+        except Exception as e:
+            logger.error(f"play_animation('{name}') failed: {e}")
+            return False
 
     def disconnect(self):
         """Disconnect and cleanup Reachy resources."""

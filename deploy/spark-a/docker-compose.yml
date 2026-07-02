@@ -34,7 +34,7 @@ services:
     ports:
       - "8010:8000"
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
     healthcheck:
@@ -67,7 +67,7 @@ services:
     ports:
       - "8020:8000"
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
     healthcheck:
@@ -98,7 +98,7 @@ services:
     ports:
       - "8030:8000"
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
     healthcheck:
@@ -168,7 +168,7 @@ services:
     ports:
       - "8040:8040"
     volumes:
-      - hf-cache:/root/.cache/huggingface
+      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
       - WIKI_INDEX=${WIKI_INDEX:-neuml/txtai-wikipedia}

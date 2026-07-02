@@ -1,0 +1,176 @@
+# Sparky inference stack — DGX Spark A (single-Spark parity profile)
+#
+# Serves everything the assistant needs, fully local:
+#   vllm-agent   :8010  Nemotron-3-Nano-30B-A3B-FP8   (agent + chitchat LLM)
+#   vllm-vision  :8020  Nemotron-Nano-12B-v2-VL-FP8   (vision LLM)
+#   vllm-router  :8030  phi-3-mini-128k-instruct      (intent router)
+#   riva-stt     :50051 Parakeet 1.1B CTC NIM          (streaming ASR, gRPC)
+#   kokoro-tts   :8880  Kokoro-82M (Kokoro-FastAPI)    (OpenAI-compatible TTS)
+#   wiki-offline :8040  txtai Wikipedia index          (offline wiki_search tool)
+#
+# One-time setup needs internet + NGC key (Riva NIM pull, HF model downloads).
+# Runtime is fully offline. See ../README.md for memory budget and health checks.
+#
+# Riva NIM service definition adapted from NVIDIA spark-reachy-photo-booth
+# (Apache-2.0). GPU memory fractions are tuned for the GB10's 128GB unified
+# memory shared between all services and the OS — keep the sum of the three
+# vLLM *_GPU_FRACTION values <= 0.70.
+
+services:
+  vllm-agent:
+    restart: unless-stopped
+    container_name: vllm-agent
+    image: ${VLLM_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
+    ipc: host
+    command: >
+      vllm serve ${AGENT_MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8}
+      --host 0.0.0.0 --port 8000
+      --trust-remote-code
+      --mamba_ssm_cache_dtype float32
+      --max-model-len ${AGENT_MAX_MODEL_LEN:-32768}
+      --gpu-memory-utilization ${AGENT_GPU_FRACTION:-0.40}
+      ${AGENT_EXTRA_ARGS:-}
+    ports:
+      - "8010:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      start_period: 2h
+      start_interval: 10s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  vllm-vision:
+    restart: unless-stopped
+    container_name: vllm-vision
+    image: ${VLLM_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
+    ipc: host
+    command: >
+      vllm serve ${VISION_MODEL:-nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}
+      --host 0.0.0.0 --port 8000
+      --trust-remote-code
+      --mamba_ssm_cache_dtype float32
+      --max-model-len ${VISION_MAX_MODEL_LEN:-16384}
+      --gpu-memory-utilization ${VISION_GPU_FRACTION:-0.20}
+      --limit-mm-per-prompt '{"image": 2}'
+      ${VISION_EXTRA_ARGS:-}
+    ports:
+      - "8020:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      start_period: 2h
+      start_interval: 10s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  vllm-router:
+    restart: unless-stopped
+    container_name: vllm-router
+    image: ${VLLM_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
+    ipc: host
+    command: >
+      vllm serve ${ROUTER_MODEL:-microsoft/Phi-3-mini-128k-instruct}
+      --host 0.0.0.0 --port 8000
+      --trust-remote-code
+      --max-model-len ${ROUTER_MAX_MODEL_LEN:-8192}
+      --gpu-memory-utilization ${ROUTER_GPU_FRACTION:-0.08}
+      ${ROUTER_EXTRA_ARGS:-}
+    ports:
+      - "8030:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      start_period: 2h
+      start_interval: 10s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  riva-stt:
+    restart: unless-stopped
+    container_name: riva-stt
+    image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.4.0
+    environment:
+      - NIM_MODEL_PROFILE=e48ada80aead95c5fdcccc3b302d07d406d1d0b25858e4994f3cc34338002572
+      - NGC_API_KEY=${NGC_API_KEY:?NGC key needed once to pull/initialize the Riva NIM}
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+    ports:
+      - "50051:50051"
+      - "9000:9000"
+    volumes:
+      - nim-cache:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/v1/health/ready"]
+      start_period: 2h
+      start_interval: 5s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  kokoro-tts:
+    restart: unless-stopped
+    container_name: kokoro-tts
+    image: ${KOKORO_IMAGE:-ghcr.io/remsky/kokoro-fastapi-gpu:latest}
+    ports:
+      - "8880:8880"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8880/health || curl -f http://127.0.0.1:8880/v1/models"]
+      start_period: 30m
+      start_interval: 5s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  wiki-offline:
+    restart: unless-stopped
+    container_name: wiki-offline
+    build:
+      context: ../wiki-offline
+    ports:
+      - "8040:8040"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - WIKI_INDEX=${WIKI_INDEX:-neuml/txtai-wikipedia}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8040/health"]
+      start_period: 2h
+      start_interval: 10s
+
+volumes:
+  hf-cache:
+  nim-cache:

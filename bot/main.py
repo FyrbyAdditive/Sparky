@@ -14,6 +14,7 @@ import os
 from dotenv import load_dotenv
 from loguru import logger
 
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame
@@ -81,7 +82,12 @@ async def run_bot():
             audio_out_enabled=True,
             audio_in_sample_rate=int(os.getenv("AUDIO_IN_SAMPLE_RATE", "16000")),
             audio_out_sample_rate=int(os.getenv("AUDIO_OUT_SAMPLE_RATE", "24000")),
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            # Room-mic turn taking: natural pauses must not end the turn.
+            # Silero marks candidate stops; smart-turn decides semantically.
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(stop_secs=float(os.getenv("VAD_STOP_SECS", "0.6")))
+            ),
+            turn_analyzer=LocalSmartTurnAnalyzerV3(),
             input_device_index=_find_device_index(pa, os.getenv("AUDIO_IN_DEVICE", ""), True),
             output_device_index=_find_device_index(pa, os.getenv("AUDIO_OUT_DEVICE", ""), False),
         )

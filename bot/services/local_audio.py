@@ -191,6 +191,36 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
         logger.info("ResilientAudioOutput: output stream reopened")
 
 
+class DeepBufferedOutput(LocalAudioOutputTransport):
+    """Stage-1 minimal change: 100ms output buffers, nothing else.
+
+    The stock buffer underruns audibly (rapid stutter) at utterance start.
+    """
+
+    async def start(self, frame: StartFrame):
+        await super(LocalAudioOutputTransport, self).start(frame)
+        if self._out_stream:
+            return
+        self._sample_rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
+        self._out_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=self._params.audio_out_channels,
+            rate=self._sample_rate,
+            frames_per_buffer=int(self._sample_rate / 10),  # 100ms
+            output=True,
+            output_device_index=self._params.output_device_index,
+        )
+        self._out_stream.start_stream()
+        await self.set_transport_ready(frame)
+
+
+class DeepBufferedLocalAudioTransport(LocalAudioTransport):
+    def output(self):
+        if not self._output:
+            self._output = DeepBufferedOutput(self._pyaudio, self._params)
+        return self._output
+
+
 class ResilientLocalAudioTransport(LocalAudioTransport):
     def input(self) -> FrameProcessor:
         if not self._input:

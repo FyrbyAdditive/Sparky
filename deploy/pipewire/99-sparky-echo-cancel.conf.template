@@ -1,0 +1,30 @@
+# Sparky echo cancellation — WebRTC AEC between the robot's speaker and mic,
+# so the assistant can hear the user (barge-in) while it is talking.
+# Installed by deploy/setup-robot-audio.sh, which replaces the @PLACEHOLDERS@
+# with the Reachy Mini Audio node names discovered on this machine.
+#
+# Apps record from "Sparky Echo-Cancelled Mic" and play to
+# "Sparky Echo-Cancelled Out" (set as defaults by the setup script).
+
+context.modules = [
+  { name = libpipewire-module-echo-cancel
+    args = {
+      capture.props = {
+        node.name = "sparky_ec_capture"
+        target.object = "@REACHY_SOURCE@"
+      }
+      source.props = {
+        node.name = "sparky_ec_source"
+        node.description = "Sparky Echo-Cancelled Mic"
+      }
+      sink.props = {
+        node.name = "sparky_ec_sink"
+        node.description = "Sparky Echo-Cancelled Out"
+      }
+      playback.props = {
+        node.name = "sparky_ec_playback"
+        target.object = "@REACHY_SINK@"
+      }
+    }
+  }
+]

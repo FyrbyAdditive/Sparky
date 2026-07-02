@@ -215,6 +215,21 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
 
 
 class DeepBufferedLocalAudioTransport(LocalAudioTransport):
+    """Stage-2 combination: deep-buffered output + the resilient input.
+
+    The stock blocking input path hangs on the raw Reachy device while
+    PipeWire drives the card's output; the callback-driven input with its
+    own PortAudio instance and 100ms buffers is the configuration that
+    demonstrably delivers frames (and brings the watchdog + telemetry).
+    """
+
+    def input(self):
+        if not self._input:
+            import pyaudio
+
+            self._input = ResilientAudioInput(pyaudio.PyAudio(), self._params)
+        return self._input
+
     def output(self):
         if not self._output:
             self._output = DeepBufferedOutput(self._pyaudio, self._params)

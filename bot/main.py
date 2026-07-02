@@ -30,6 +30,7 @@ from pipecat.runner.utils import (
     maybe_capture_participant_camera,
 )
 from pipecat.services.nvidia.stt import NvidiaSTTService
+from pipecat.services.openai import tts as openai_tts
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
@@ -70,12 +71,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         model_function_map={"function_id": "", "model_name": os.getenv("RIVA_MODEL", "")},
     )
 
-    # OpenAI-compatible TTS from a local Kokoro-FastAPI server.
+    # OpenAI-compatible TTS from a local Kokoro-FastAPI server. pipecat
+    # validates voice names against OpenAI's official list, so register the
+    # Kokoro voice to let it pass through to the server untouched.
+    kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
+    openai_tts.VALID_VOICES[kokoro_voice] = kokoro_voice
     tts = OpenAITTSService(
         api_key="EMPTY",
         base_url=os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1"),
         model=os.getenv("KOKORO_MODEL", "kokoro"),
-        voice=os.getenv("KOKORO_VOICE", "af_heart"),
+        voice=kokoro_voice,
     )
 
     # The NAT router service (local), which fans out to local vLLM endpoints.

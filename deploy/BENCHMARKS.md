@@ -15,6 +15,19 @@ DGX Spark GB10, all services co-resident, `scripts/bench.py` (3 runs, median).
 Estimated voice-turn latency (speech end → first audio): **~1.2s**.
 40.9 tok/s decode is ~10x faster than speech rate — no TTS starvation.
 
-Improvement candidates: Kokoro first-chunk latency (~0.8s — try smaller chunk
-size or streaming PCM warm-path), vision decode via NVFP4-QAD variant,
-`unified-1spark` profile (Qwen3.6-35B-A3B + MTP) for higher tok/s.
+## magi — after optimization round (2026-07-02, late)
+
+| what | before | after |
+|---|---|---|
+| chitchat: first byte back from NAT | 4.5s (non-streaming) | **0.79s** (token streaming through the router) |
+| Kokoro TTS first audio | 788ms/sentence | **~5ms** (server-side stream=true) |
+| wiki tool query | 6-14s (9GB index vs page cache) | **0.17s** (slim index, cache-resident) |
+| quiet session | dead after ~5 min (idle timeout) | stays alive (BOT_IDLE_TIMEOUT_SECS) |
+
+GPU audit: LLMs, Riva STT and Kokoro TTS all confirmed on GPU; VAD/turn/
+emotion deliberately CPU (tiny ONNX models). Perceived voice-turn latency
+now dominated by STT finalize + router hop (~1s total to first audio).
+
+Remaining candidates: vision decode via NVFP4-QAD variant, unified-1spark
+profile (Qwen3.6-35B-A3B + MTP), NAT step_adaptor filtering to trim SSE
+intermediate_data noise.

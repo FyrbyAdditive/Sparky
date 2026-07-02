@@ -13,6 +13,10 @@ sudo usermod -a -G dialout "$USER"   # robot motor serial (/dev/ttyACM*)
 sudo usermod -a -G video "$USER"     # robot camera (/dev/video*)
 sudo usermod -a -G audio "$USER"     # robot speaker/mic
 
+echo "== Installing Reachy Mini udev rules (device access for systemd services)"
+sudo cp "$(dirname "$0")/udev/99-reachy-mini.rules" /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+
 echo "== Installing uv (Python manager) if missing"
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 

@@ -1,0 +1,9 @@
+# Reachy Mini device permissions — lets the daemon/bot run as any user
+# (including under systemd user services, which don't refresh group
+# membership until the user manager restarts).
+# Motor serial bridge (QinHeng CH34x on the robot)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", MODE="0666", SYMLINK+="reachy_mini_serial"
+# Robot camera
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="38fb", MODE="0666"
+# Robot audio (speaker + mic array)
+SUBSYSTEM=="sound", ATTRS{idVendor}=="38fb", MODE="0666"

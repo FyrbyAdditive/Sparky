@@ -1,0 +1,12 @@
+[Unit]
+Description=Sparky NAT agent server
+After=network.target
+
+[Service]
+WorkingDirectory=%h/Sparky/nat
+ExecStart=%h/.local/bin/uv run --env-file %h/Sparky/.env nat serve --config_file src/ces_tutorial/config.yml --port 8001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

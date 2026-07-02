@@ -1,0 +1,12 @@
+[Unit]
+Description=Reachy Mini robot daemon (hardware)
+After=network.target
+
+[Service]
+WorkingDirectory=%h/Sparky/bot
+ExecStart=%h/.local/bin/uv run -m reachy_mini.daemon.app.main --no-localhost-only
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

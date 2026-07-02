@@ -37,9 +37,13 @@ from nat_vision_llm import NATVisionLLMService
 from services.emotion import EmotionReactorProcessor
 from services.reachy_service import ReachyService
 from services.processor import ReachyWobblerProcessor
+from services.robot_api import start_robot_api
 
 
 load_dotenv(override=True)
+
+# Control endpoint for NAT agent tools (play_animation / look_at)
+start_robot_api()
 
 
 # We store functions so objects (e.g. SileroVADAnalyzer) don't get

@@ -9,11 +9,19 @@ functions:
       base_url: ${WIKI_BASE_URL:-http://localhost:8040}
       max_results: 2
 
+   play_animation:
+      _type: robot_play_animation
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   look_at:
+      _type: robot_look_at
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
    router:
       _type: router
       route_config:
         - name: other
-          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions.
+          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes requests for the robot to move or gesture, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep.
         - name: chit_chat
           description: Any simple chit chat, small talk, or casual conversation.
         - name: image_understanding
@@ -27,7 +35,7 @@ functions:
       llm_name: agent_llm
       verbose: true
       parse_agent_response_max_retries: 3
-      tool_names: [wikipedia_search]
+      tool_names: [wikipedia_search, play_animation, look_at]
 
 # All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
 # model names come from the environment so model profiles can swap them

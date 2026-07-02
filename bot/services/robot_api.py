@@ -72,6 +72,25 @@ class TextRequest(BaseModel):
     text: str
 
 
+class VolumeRequest(BaseModel):
+    percent: int
+
+
+def _reachy_sink() -> str | None:
+    import subprocess
+
+    try:
+        out = subprocess.run(["pactl", "list", "short", "sinks"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) > 1 and "reachy" in parts[1].lower():
+                return parts[1]
+    except Exception as e:
+        logger.warning(f"sink discovery failed: {e}")
+    return None
+
+
 class MuteRequest(BaseModel):
     muted: bool
 
@@ -124,6 +143,37 @@ def _build_app() -> FastAPI:
         gate.set_muted(req.muted)
         return {"ok": True, "muted": req.muted}
 
+    @app.get("/volume")
+    def get_volume():
+        import re
+        import subprocess
+
+        sink = _reachy_sink()
+        if not sink:
+            return {"ok": False, "error": "no_sink"}
+        try:
+            out = subprocess.run(["pactl", "get-sink-volume", sink],
+                                 capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"(\d+)%", out)
+            return {"ok": True, "percent": int(m.group(1)) if m else None}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @app.post("/volume")
+    def set_volume(req: VolumeRequest):
+        import subprocess
+
+        sink = _reachy_sink()
+        if not sink:
+            return {"ok": False, "error": "no_sink"}
+        percent = max(0, min(150, req.percent))
+        try:
+            subprocess.run(["pactl", "set-sink-volume", sink, f"{percent}%"],
+                           check=True, timeout=5)
+            return {"ok": True, "percent": percent}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     @app.get("/status")
     async def status():
         def health_targets():
@@ -164,10 +214,19 @@ def _build_app() -> FastAPI:
             await asyncio.gather(*(check(u, ns) for u, ns in unique.items()))
 
         gate = _session["mic_gate"]
+        try:
+            import time as _time
+
+            from .local_audio import AUDIO_STATS
+            audio = dict(AUDIO_STATS)
+            audio["mic_frame_age_secs"] = round(_time.time() - audio.pop("mic_last_frame_ts"), 1)
+        except Exception:
+            audio = {}
         return {
             "services": results,
             "robot_connected": service.connected,
             "muted": bool(gate.muted) if gate else False,
+            "audio": audio,
             "session_active": _session["task"] is not None,
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),

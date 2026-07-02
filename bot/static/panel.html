@@ -70,6 +70,13 @@
   </div>
   <div id="right">
     <section>
+      <h2>Volume</h2>
+      <div class="row" style="align-items:center">
+        <input id="volume" type="range" min="0" max="120" step="5" style="flex:1">
+        <span id="volLabel" class="chip">…</span>
+      </div>
+    </section>
+    <section>
       <h2>Look</h2>
       <div id="dpad">
         <span class="blank"></span><button onclick="look('up')">▲</button><span class="blank"></span>
@@ -143,6 +150,19 @@ $('muteBtn').onclick = async () => {
   $('muteBtn').classList.toggle('muted', muted);
 };
 
+let volTimer = null;
+$('volume').addEventListener('input', e => {
+  $('volLabel').textContent = e.target.value + '%';
+  clearTimeout(volTimer);
+  volTimer = setTimeout(() => post('/volume', {percent: parseInt(e.target.value)}), 250);
+});
+async function loadVolume() {
+  try {
+    const v = await fetch('volume').then(r => r.json());
+    if (v.ok && v.percent !== null) { $('volume').value = v.percent; $('volLabel').textContent = v.percent + '%'; }
+  } catch (e) {}
+}
+
 async function loadAnimations() {
   const r = await fetch('robot/animations').then(r => r.json());
   $('anims').innerHTML = '';
@@ -168,6 +188,15 @@ async function refreshStatus() {
       c.textContent = name;
       sv.appendChild(c);
     });
+    if (s.audio && s.audio.mic_frame_age_secs !== undefined) {
+      const micOk = s.audio.mic_frame_age_secs < 3;
+      const c = document.createElement('span');
+      c.className = 'chip ' + (micOk ? 'ok' : 'bad');
+      c.textContent = micOk ? 'mic-flow' : 'mic-stalled ' + s.audio.mic_frame_age_secs + 's';
+      c.title = 'reopens: mic ' + s.audio.mic_reopens + ', out ' + s.audio.out_reopens +
+                ', write errors ' + s.audio.out_write_errors;
+      sv.appendChild(c);
+    }
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     if (s.muted !== muted) {
       muted = s.muted;
@@ -179,6 +208,7 @@ async function refreshStatus() {
 
 connectWS();
 loadAnimations();
+loadVolume();
 refreshStatus();
 setInterval(refreshStatus, 10000);
 </script>

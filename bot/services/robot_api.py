@@ -218,8 +218,10 @@ def _build_app() -> FastAPI:
             import time as _time
 
             from .local_audio import AUDIO_STATS
-            audio = dict(AUDIO_STATS)
-            audio["mic_frame_age_secs"] = round(_time.time() - audio.pop("mic_last_frame_ts"), 1)
+            audio = {}
+            if AUDIO_STATS["mic_last_frame_ts"] > 0:  # instrumented transport active
+                audio = dict(AUDIO_STATS)
+                audio["mic_frame_age_secs"] = round(_time.time() - audio.pop("mic_last_frame_ts"), 1)
         except Exception:
             audio = {}
         return {

@@ -25,9 +25,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.observers.loggers.transcription_log_observer import TranscriptionLogObserver
 from pipecat.services.nvidia.stt import NvidiaSTTService
-from pipecat.transports.local.audio import LocalAudioTransportParams
-
-from services.local_audio import ResilientLocalAudioTransport
+from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
 from nat_vision_llm import NATVisionLLMService
 from services.emotion import EmotionReactorProcessor
@@ -78,7 +76,7 @@ async def run_bot():
     import pyaudio
 
     pa = pyaudio.PyAudio()
-    transport = ResilientLocalAudioTransport(
+    transport = LocalAudioTransport(
         LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,

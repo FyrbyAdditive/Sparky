@@ -259,6 +259,18 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
         its trace must be parsed whole.
         """
 
+        try:
+            async for chunk in _stream_routes(chat_request):
+                yield chunk
+        except Exception as e:
+            # A silent robot is the worst failure mode: surface errors as speech.
+            logger.error(f"RouterAgent(stream): error, returning spoken apology: {e}", exc_info=True)
+            yield ChatResponseChunk.create_streaming_chunk(
+                "Sorry, something went wrong with that one. Could you try asking again?",
+                role="assistant", model="error")
+            yield ChatResponseChunk.create_streaming_chunk(None, model="error", finish_reason="stop")
+
+    async def _stream_routes(chat_request) -> AsyncGenerator[ChatResponseChunk]:
         router_response = await router_function.ainvoke(chat_request)
         route = router_response.choices[0].message.content
         logger.info(f"RouterAgent(stream): intent '{route}'")

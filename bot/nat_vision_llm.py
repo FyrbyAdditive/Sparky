@@ -117,6 +117,20 @@ class NATVisionLLMService(NvidiaLLMService):
             logger.error(f"Failed to encode image: {e}")
             return None
 
+    def _scrub_old_images(self, messages):
+        """Remove image parts from earlier turns, keeping their text.
+
+        Only the current frame should travel with the request: history images
+        grow the prompt every turn and vLLM rejects prompts over its
+        images-per-prompt limit (the robot then goes silent).
+        """
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                texts = [p.get("text", "") for p in content
+                         if isinstance(p, dict) and p.get("type") == "text"]
+                msg["content"] = " ".join(t for t in texts if t)
+
     def _add_image_to_context(self, context, image_data_url: str, user_message: str):
         """
         Manually add image to the last user message in context using OpenAI's multimodal format.
@@ -134,6 +148,9 @@ class NATVisionLLMService(NvidiaLLMService):
         if not messages:
             logger.warning("No messages in context, cannot add image")
             return
+
+        # Keep exactly one image in flight: the frame for this turn
+        self._scrub_old_images(messages)
 
         # Find the last user message
         for i in range(len(messages) - 1, -1, -1):

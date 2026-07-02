@@ -247,9 +247,52 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
         except Exception as e:
             logger.error(f"RouterAgent: Top-level error in _response_fn: {e}", exc_info=True)
             raise
-    
-    yield FunctionInfo.from_fn(
-        _response_fn,
+
+    from collections.abc import AsyncGenerator
+
+    from nat.data_models.api_server import ChatResponseChunk
+
+    async def _stream_fn(chat_request: ChatRequest) -> AsyncGenerator[ChatResponseChunk]:
+        """Streaming variant: chitchat and vision routes stream tokens as they
+        generate (the voice pipeline starts speaking immediately instead of
+        waiting for the full reply); the ReAct agent stays non-streaming since
+        its trace must be parsed whole.
+        """
+
+        router_response = await router_function.ainvoke(chat_request)
+        route = router_response.choices[0].message.content
+        logger.info(f"RouterAgent(stream): intent '{route}'")
+
+        # Intermediate chunks must carry finish_reason=None (from_string marks
+        # every chunk "stop", which ends the client stream after one chunk).
+        if route == "chit_chat":
+            langchain_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=True)
+            async for chunk in chitchat_llm.astream(langchain_messages):
+                content = getattr(chunk, "content", None)
+                if content:
+                    yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="chitchat")
+            yield ChatResponseChunk.create_streaming_chunk(None, model="chitchat", finish_reason="stop")
+        elif route == "image_understanding":
+            langchain_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=False)
+            async for chunk in image_llm.astream(langchain_messages):
+                content = getattr(chunk, "content", None)
+                if content:
+                    yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="image_understanding")
+            yield ChatResponseChunk.create_streaming_chunk(None, model="image_understanding", finish_reason="stop")
+        else:
+            nat_messages = _convert_to_nat_messages(chat_request.messages, redact_images=True)
+            agent_input = {
+                "messages": nat_messages,
+                "model": chat_request.model if hasattr(chat_request, 'model') else "nemotron",
+            }
+            agent_response = await agent_function.ainvoke(agent_input)
+            content = agent_response.choices[0].message.content
+            yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="agent")
+            yield ChatResponseChunk.create_streaming_chunk(None, model="agent", finish_reason="stop")
+
+    yield FunctionInfo.create(
+        single_fn=_response_fn,
+        stream_fn=_stream_fn,
         description="Route chat requests between chitchat and agent based on intent"
     )
 

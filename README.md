@@ -120,6 +120,11 @@ allow mic/camera, and talk to the robot.
 
 ## Troubleshooting
 
+- **macOS sim: `mjpython` fails with `Library not loaded: libpython3.13.dylib`**
+  (uv-managed Pythons don't place the dylib where MuJoCo's launcher looks):
+  ```bash
+  ln -sf ~/.local/share/uv/python/cpython-3.13*/lib/libpython3.13.dylib bot/.venv/lib/
+  ```
 - **Service health**: run the curl checks in [deploy/README.md](deploy/README.md)
 - **Robot connection**: start the daemon before the bot service; the bot retries and
   will run without the robot if unavailable. `REACHY_USE_SIM` must match how the

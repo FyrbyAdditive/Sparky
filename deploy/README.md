@@ -63,6 +63,40 @@ curl http://$SPARK_A:8880/v1/audio/speech -H 'Content-Type: application/json' \
   -o /tmp/tts.wav
 ```
 
+## Replicating on a new machine (checklist from the magi/shodan bring-up)
+
+1. **Sync the repo**: `rsync -az --exclude .venv --exclude __pycache__ Sparky/ user@spark:~/Sparky/`
+2. **NGC auth** (once per machine): `docker login nvcr.io` with user `$oauthtoken`,
+   password = NGC API key. Put the same key in `deploy/spark-a/.env`
+   (`NGC_API_KEY=...`) — the Riva NIM also needs it at first start to fetch its
+   model profile. Set `HF_CACHE_DIR=/home/<user>/.cache/huggingface` there too.
+3. **Bring up the stack**: `cd deploy/spark-a && cp .env envfile-merged && cat
+   ../profiles/<profile>.env >> envfile-merged && docker compose --env-file
+   envfile-merged up -d --build`. First start downloads ~65GB; watch with
+   `docker ps` until all services are `(healthy)`.
+4. **Bot host prep** (the machine with the robot): `./deploy/bot-host-setup.sh`
+   (installs libportaudio2, adds dialout/video/audio groups, installs uv, syncs
+   envs). Re-login afterwards.
+5. **Env**: `cp deploy/profiles/<profile>.bot.env .env`, set `SPARK_A_HOST`.
+
+Pitfalls these steps encode (all hit on first deploy):
+- NIM cache volume: fresh named volumes are root-owned; the NIM runs non-root
+  and dies with "manifest download: Permission denied" — the `init-volumes`
+  service now handles this automatically.
+- Unified memory: vLLM's `--gpu-memory-utilization` is a fraction of the whole
+  128GB shared pool; a model's weights must fit *inside* its fraction with room
+  for KV cache (phi-3 needed 0.14, not 0.08), and simultaneous engine starts
+  race each other's memory measurements — if a service dies at first boot with
+  "No available memory for the cache blocks", restart it after the others load.
+- Reasoning models: Nemotron-3's chat template defaults `enable_thinking=True`,
+  which leaks chain-of-thought into replies; the parity profile passes
+  `--default-chat-template-kwargs '{"enable_thinking":false}'` (right for a
+  voice assistant).
+- The SDK client must not grab the robot camera/mic (bot uses WebRTC media);
+  `REACHY_MEDIA_BACKEND=no_media` is the code default.
+- `pkill -f reachy` from a remote ssh command kills your own ssh wrapper —
+  bracket the pattern (`pkill -f "[r]eachy..."`).
+
 ## Notes
 
 - vLLM image default is NVIDIA's Spark-tuned NGC build (`nvcr.io/nvidia/vllm`);

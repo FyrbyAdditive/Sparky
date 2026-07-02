@@ -17,6 +17,18 @@
 # vLLM *_GPU_FRACTION values <= 0.70.
 
 services:
+  # NIM containers run as non-root and cannot write a fresh named volume
+  # (manifest download fails with "Permission denied"); open it up first.
+  # Same pattern as NVIDIA spark-reachy-photo-booth.
+  init-volumes:
+    image: busybox:latest
+    container_name: init-volumes
+    profiles: [ "parity", "unified", "split" ]
+    command: sh -c "chmod -R 777 /nim && echo volumes ready"
+    volumes:
+      - nim-cache:/nim
+    restart: "no"
+
   vllm-agent:
     restart: unless-stopped
     profiles: [ "parity", "unified", "split" ]
@@ -118,6 +130,9 @@ services:
     profiles: [ "parity", "unified" ]
     container_name: riva-stt
     image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.4.0
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
     environment:
       - NIM_MODEL_PROFILE=e48ada80aead95c5fdcccc3b302d07d406d1d0b25858e4994f3cc34338002572
       - NGC_API_KEY=${NGC_API_KEY:?NGC key needed once to pull/initialize the Riva NIM}

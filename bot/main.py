@@ -133,7 +133,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             enable_usage_metrics=True,
         ),
         observers=[RTVIObserver(rtvi), TranscriptionLogObserver()],
-        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+        # Kiosk use: don't silently kill quiet sessions (the runner default of
+        # ~5 min made the robot "stop responding" after a pause). 0 disables.
+        idle_timeout_secs=(
+            int(os.getenv("BOT_IDLE_TIMEOUT_SECS", "0")) or None
+        ),
     )
 
     @transport.event_handler("on_client_connected")

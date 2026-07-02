@@ -5,12 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "aiortc>=1.14.0",
+    "huggingface-hub>=0.26",
     "onnxruntime>=1.23.2",
+    "opencv-python>=4.8",
     "pipecat-ai-small-webrtc-prebuilt>=2.0.4",
     "pipecat-ai[webrtc,nvidia,openai,silero,local-smart-turn,runner]>=1.4",
     "psutil>=6.0",
     "reachy-mini[mujoco]>=1.2.4",
     "reachy-mini-dances-library>=0.2.1",
-    "transformers>=4.57.3",
+    "tokenizers>=0.20",
 ]

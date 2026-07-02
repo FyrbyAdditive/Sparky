@@ -7,8 +7,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "== pyaudio build dependency"
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev
+echo "== dependencies (pyaudio build dep + pactl/wpctl tooling)"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev pulseaudio-utils pipewire-audio-client-libraries 2>/dev/null \
+  || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q portaudio19-dev pulseaudio-utils
 
 echo "== discovering Reachy Mini audio nodes"
 SINK=$(pactl list short sinks | grep -i reachy | awk '{print $2}' | head -1 || true)

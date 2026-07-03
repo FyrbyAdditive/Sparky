@@ -183,7 +183,15 @@ async def run_bot():
     )
     llm.set_user_id("local")  # vision requests answered by the robot camera
 
-    messages = [{"role": "system", "content": PERSONA}]
+    # Date + timezone context (no clock time: a per-turn timestamp would
+    # bust the LLM prefix cache; date-only keeps it stable all day).
+    import datetime
+
+    now = datetime.datetime.now().astimezone()
+    date_context = (f" Today's date is {now.strftime('%A %d %B %Y')} and the local "
+                    f"timezone is {now.tzname()}. Mention these only when relevant.")
+
+    messages = [{"role": "system", "content": PERSONA + date_context}]
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
 

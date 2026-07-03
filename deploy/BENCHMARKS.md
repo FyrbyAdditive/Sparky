@@ -159,3 +159,11 @@ router prompt); the dedicated router container is gone and magi runs no
 LLM at all (101GB available). Shodan engine trimmed: fraction 0.38,
 seqs 3, batched-tokens 4096 → engine 100GB→80GB, swap zero, and agent
 TTFT improved to 150ms / 61.6 tok/s.
+
+## 2026-07-03 — speculative execution + prefix warmup
+
+Chitchat first-chunk from NAT (the dominant turn type): **1.08s → 0.41s
+median** (speculative chitchat starts concurrently with the router call;
+loser cancelled; prefix caching absorbs repeated prefill). Vision turns
+prefetch the camera at speech onset, removing the grab+encode from the
+post-speech critical path. Boot warmup pre-caches the persona prefill.

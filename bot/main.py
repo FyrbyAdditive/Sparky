@@ -385,16 +385,21 @@ async def run_bot():
         import httpx
         base = os.getenv("CHITCHAT_LLM_BASE_URL", "http://localhost:8010/v1").rstrip("/")
         model = os.getenv("CHITCHAT_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                await client.post(f"{base}/chat/completions",
-                                  headers={"Authorization": "Bearer EMPTY"},
-                                  json={"model": model, "max_tokens": 1,
-                                        "messages": [{"role": "system", "content": messages[0]["content"]},
-                                                     {"role": "user", "content": "hi"}]})
-            logger.info("Prefix warmup: persona prefill cached on the engine")
-        except Exception as e:
-            logger.warning(f"Prefix warmup skipped: {e}")
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    r = await client.post(f"{base}/chat/completions",
+                                          headers={"Authorization": "Bearer EMPTY"},
+                                          json={"model": model, "max_tokens": 1,
+                                                "messages": [{"role": "system", "content": messages[0]["content"]},
+                                                             {"role": "user", "content": "hi"}]})
+                    r.raise_for_status()
+                logger.info("Prefix warmup: persona prefill cached on the engine")
+                return
+            except Exception as e:
+                logger.warning(f"Prefix warmup attempt {attempt + 1} failed: "
+                               f"{type(e).__name__}: {e}")
+                await asyncio.sleep(5)
 
     asyncio.create_task(_warm_prefix())
 

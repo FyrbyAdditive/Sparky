@@ -169,8 +169,28 @@ def stop_children():
     children.clear()
 
 
+def sweep_leftovers():
+    """Kill any stray trio processes from previous runs — duplicate
+    instances fight over the robot and can grab the wrong audio device."""
+    import re
+
+    patterns = ["reachy_mini.daemon", "bot/main.py", "python main.py", "nat serve"]
+    out = subprocess.run(["ps", "-axo", "pid,command"], capture_output=True, text=True).stdout
+    me = os.getpid()
+    for line in out.splitlines():
+        if any(p in line for p in patterns) and "launcher.py" not in line:
+            m = re.match(r"\s*(\d+)", line)
+            if m and int(m.group(1)) != me:
+                say(f"Sweeping leftover process {m.group(1)}: {line.strip()[:80]}")
+                try:
+                    os.kill(int(m.group(1)), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
 def main():
     say("Sparky remote client")
+    sweep_leftovers()
     if not ENV_FILE.exists():
         wizard()
     env = read_env()
@@ -211,21 +231,12 @@ def main():
             time.sleep(3)
             for i, (name, proc) in enumerate(list(children)):
                 if proc.poll() is not None:
-                    crash_counts[name] = crash_counts.get(name, 0) + 1
-                    if crash_counts[name] > 3:
-                        raise RuntimeError(f"{name} keeps crashing — see {CONFIG_DIR}/{name}.log")
-                    say(f"⚠ {name} exited — restarting ({crash_counts[name]}/3)")
-                    children.pop(i)
-                    if name == "daemon":
-                        start_child(name, [UV, "run", "-m", "reachy_mini.daemon.app.main",
-                                           "--no-localhost-only"], REPO / "bot", "http://127.0.0.1:8000/")
-                    elif name == "nat":
-                        start_child(name, [UV, "run", "--env-file", env_file, "nat", "serve",
-                                           "--config_file", "src/ces_tutorial/config.yml",
-                                           "--port", "8001"], REPO / "nat", "http://127.0.0.1:8001/docs")
-                    elif name == "bot":
-                        start_child(name, [UV, "run", "--env-file", env_file, "python", "main.py"],
-                                    REPO / "bot", "http://127.0.0.1:7861/health")
+                    # SAFETY: never auto-restart into live hardware. A crashed
+                    # component means an unknown robot state — stop the world
+                    # and let the human relaunch deliberately.
+                    raise RuntimeError(
+                        f"{name} exited unexpectedly — stopping everything for safety. "
+                        f"See {CONFIG_DIR}/{name}.log, then relaunch Sparky.")
     except KeyboardInterrupt:
         say("Shutting down...")
 

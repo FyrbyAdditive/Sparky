@@ -42,6 +42,26 @@ from services.transcript_tap import TranscriptTap
 
 load_dotenv(override=True)
 
+
+def _acquire_single_instance_lock():
+    """Refuse to run two bots: duplicate instances fight over the robot
+    (conflicting motion commands) and over audio devices."""
+    import fcntl
+
+    lock_path = os.path.expanduser("~/.sparky-bot.lock")
+    lock = open(lock_path, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise SystemExit("Another Sparky bot instance is already running on this "
+                         "machine (lock: ~/.sparky-bot.lock). Stop it first.")
+    lock.write(str(os.getpid()))
+    lock.flush()
+    return lock
+
+
+_instance_lock = _acquire_single_instance_lock()
+
 # Control panel + agent robot tools (play_animation / look_at)
 start_robot_api()
 

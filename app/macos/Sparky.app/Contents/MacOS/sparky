@@ -1,0 +1,11 @@
+#!/bin/bash
+# Sparky.app entry point — opens Terminal running the launcher so the
+# first-run wizard and status output are visible, then the browser panel
+# becomes the UI. (/Users/tim/VSCode/Sparky is baked in by app/install.sh.)
+REPO="/Users/tim/VSCode/Sparky"
+osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd '$REPO' && uv run --project bot python app/launcher.py"
+end tell
+EOF

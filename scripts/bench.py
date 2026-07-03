@@ -34,8 +34,12 @@ def bench_llm(name: str, base_url: str, model: str) -> dict | None:
             "messages": [{"role": "user", "content": PROMPT}],
             "max_tokens": 256,
             "stream": True,
+            # under MTP/spec-decode one SSE chunk carries several tokens, so
+            # chunk counting undercounts — ask the server for real usage
+            "stream_options": {"include_usage": True},
         }
-        tokens = 0
+        chunks = 0
+        usage_tokens = None
         t0 = time.perf_counter()
         ttft = None
         try:
@@ -50,11 +54,14 @@ def bench_llm(name: str, base_url: str, model: str) -> dict | None:
                     if delta.get("content"):
                         if ttft is None:
                             ttft = time.perf_counter() - t0
-                        tokens += 1
+                        chunks += 1
+                    if chunk.get("usage"):
+                        usage_tokens = chunk["usage"].get("completion_tokens")
         except Exception as e:
             print(f"  {name}: FAILED ({e})")
             return None
         total = time.perf_counter() - t0
+        tokens = usage_tokens if usage_tokens else chunks
         if ttft is None or tokens < 2:
             print(f"  {name}: no streamed tokens returned")
             return None

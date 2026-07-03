@@ -18,7 +18,7 @@ A profile is two small env files — nothing else changes between model setups:
 | `unified-1spark` | 1 | Qwen3.6-35B-A3B-NVFP4 (MTP) | same model (multimodal) | Fastest; one endpoint serves every role |
 | `quality-2spark-split` | 2 | Nemotron-3-Super-120B-A12B-NVFP4 (MTP) on A | 12B-v2-VL on B | Best quality with predictable latency |
 | `max-2spark-tp2` | 2 | Qwen3-235B-A22B-FP4, TP=2 over RoCE | 12B-v2-VL on B | Maximum quality; see `deploy/tp2/` + `interconnect.md` |
-| **`duo-2spark`** (current) | 2 | Qwen3.6-35B NVFP4+MTP on shodan (fraction 0.65, 65k ctx) | same model | Audio (Riva/Kokoro/panel) on the robot host; inference + full wiki index on the other Spark over the 200GbE link |
+| **`duo-2spark`** (current) | 2 | Qwen3.6-35B NVFP4+MTP on shodan (fraction 0.50, 48k ctx — 0.65 OOM'd the host, see BENCHMARKS) | same model | Audio (Riva/Kokoro/phi-3 router/panel) on the robot host; inference + full wiki index on the other Spark over the 200GbE link |
 
 ## Usage
 

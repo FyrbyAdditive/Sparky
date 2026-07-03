@@ -15,13 +15,20 @@ Everything the assistant consumes is an HTTP/gRPC endpoint, so the robot/bot hos
 
 ## Bring-up
 
+Use the consolidated stack (`deploy/stack/`, compose project `sparky`) with a
+profile env from `deploy/profiles/` — the `spark-a`/`spark-b` directories are
+legacy and kept only for reference:
+
 ```bash
-cd deploy/spark-a
-cp ../.env.example .env        # then edit
-docker login nvcr.io           # user: $oauthtoken, password: <NGC_API_KEY>
-docker compose up -d --build
-watch docker compose ps        # wait for all services to report healthy
+cd deploy/stack
+cp ../.env.example ../spark-a/.env   # secrets file; referenced below as envfile-merged
+docker login nvcr.io                 # user: $oauthtoken, password: <NGC_API_KEY>
+cat ../spark-a/.env ../profiles/parity-1spark.env > envfile-merged
+docker compose --env-file envfile-merged up -d --build
+watch docker compose ps              # wait for all services to report healthy
 ```
+
+Regenerate `envfile-merged` after any profile edit — it goes stale silently.
 
 First start downloads ~65GB of models (Nemotron 30B FP8 ≈ 40GB, VL 12B FP8 ≈ 13GB,
 phi-3-mini ≈ 8GB, Riva NIM, Kokoro, txtai wiki index ≈ 9GB). Subsequent starts load
@@ -33,7 +40,7 @@ from the `hf-cache` / `nim-cache` volumes.
 |---|---|---|
 | vllm-agent | Nemotron-3-Nano-30B-A3B-FP8 | ~51GB (0.40 fraction incl. KV) |
 | vllm-vision | Nemotron-Nano-12B-v2-VL-FP8 | ~26GB (0.20) |
-| vllm-router | Phi-3-mini-128k-instruct | ~10GB (0.08) |
+| vllm-router | Phi-3-mini-128k-instruct | ~17GB (0.14 — 0.08 starves the KV cache) |
 | riva-stt | Parakeet 1.1B CTC NIM | ~6GB |
 | kokoro-tts | Kokoro-82M | ~2GB |
 | wiki-offline | txtai index (CPU) | ~10GB RAM |
@@ -70,8 +77,8 @@ curl http://$SPARK_A:8880/v1/audio/speech -H 'Content-Type: application/json' \
    password = NGC API key. Put the same key in `deploy/spark-a/.env`
    (`NGC_API_KEY=...`) — the Riva NIM also needs it at first start to fetch its
    model profile. Set `HF_CACHE_DIR=/home/<user>/.cache/huggingface` there too.
-3. **Bring up the stack**: `cd deploy/spark-a && cp .env envfile-merged && cat
-   ../profiles/<profile>.env >> envfile-merged && docker compose --env-file
+3. **Bring up the stack**: `cd deploy/stack && cat ../spark-a/.env
+   ../profiles/<profile>.env > envfile-merged && docker compose --env-file
    envfile-merged up -d --build`. First start downloads ~65GB; watch with
    `docker ps` until all services are `(healthy)`.
 4. **Bot host prep** (the machine with the robot): `./deploy/bot-host-setup.sh`

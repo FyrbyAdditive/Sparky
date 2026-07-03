@@ -12,3 +12,6 @@ wheels/
 # per-machine stack secrets (NGC key etc.)
 deploy/stack/.env
 deploy/stack/envfile-merged
+
+# generated per-machine by app/install.sh (bakes the local repo path)
+app/macos/Sparky.app/Contents/MacOS/sparky

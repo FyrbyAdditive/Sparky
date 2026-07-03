@@ -72,7 +72,7 @@ and bot exactly as `app/launcher.py` does.
 ## How It Works
 
 1. **Vision & Audio Input**: the bot captures camera frames and streams mic audio to
-   the local Riva Parakeet server for transcription
+   the local Nemotron ASR NIM for transcription and speaker diarization
 2. **Agent Processing**: the NAT router selects the model per turn —
    chit-chat → chat LLM · visual queries → vision LLM · actions/knowledge → ReAct agent
    (with the offline Wikipedia tool)

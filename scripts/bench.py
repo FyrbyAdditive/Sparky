@@ -103,6 +103,10 @@ def bench_tts(base_url: str, voice: str, model: str) -> dict | None:
 
 
 def bench_stt(server: str, wav_path: str) -> dict | None:
+    """Streaming benchmark against the Nemotron ASR NIM: feed the wav at
+    realtime pace and measure speech-end -> final-transcript latency (the
+    number that matters for voice-turn feel). The NIM is streaming-only, so
+    the old offline_recognize path does not apply."""
     try:
         import riva.client
         import wave
@@ -111,20 +115,49 @@ def bench_stt(server: str, wav_path: str) -> dict | None:
         return None
     try:
         with wave.open(wav_path, "rb") as w:
-            duration = w.getnframes() / w.getframerate()
-        with open(wav_path, "rb") as f:
-            data = f.read()
+            rate = w.getframerate()
+            pcm = w.readframes(w.getnframes())
+        duration = len(pcm) / (2 * rate)
         auth = riva.client.Auth(uri=server, use_ssl=False)
         asr = riva.client.ASRService(auth)
-        config = riva.client.RecognitionConfig(language_code="en-US", max_alternatives=1)
-        lats = []
+        cfg = riva.client.StreamingRecognitionConfig(
+            config=riva.client.RecognitionConfig(
+                encoding=riva.client.AudioEncoding.LINEAR_PCM,
+                sample_rate_hertz=rate, language_code="en-US",
+                max_alternatives=1, enable_automatic_punctuation=True,
+                audio_channel_count=1),
+            interim_results=True)
+        chunk = int(rate * 0.1) * 2  # 100ms
+        lats, text = [], ""
         for _ in range(RUNS):
-            t0 = time.perf_counter()
-            resp = asr.offline_recognize(data, config)
-            lats.append(time.perf_counter() - t0)
-        text = resp.results[0].alternatives[0].transcript if resp.results else ""
+            audio_done_at = None
+
+            def chunks():
+                nonlocal audio_done_at
+                for i in range(0, len(pcm), chunk):
+                    yield pcm[i:i + chunk]
+                    time.sleep(0.1)
+                audio_done_at = time.perf_counter()
+                for _ in range(30):  # trailing silence until the final lands
+                    yield b"\x00" * chunk
+                    time.sleep(0.1)
+
+            final_at = None
+            for resp in asr.streaming_response_generator(
+                    audio_chunks=chunks(), streaming_config=cfg):
+                for r in resp.results:
+                    if r.is_final and r.alternatives:
+                        text = r.alternatives[0].transcript
+                        final_at = time.perf_counter()
+                if final_at:
+                    break
+            if final_at is None or audio_done_at is None:
+                print("  stt: no final transcript returned")
+                return None
+            lats.append(max(0.0, final_at - audio_done_at))
         lat = statistics.median(lats)
-        return {"name": "stt", "latency_s": lat, "rtf_x": duration / lat, "text": text[:60]}
+        return {"name": "stt", "latency_s": lat, "rtf_x": duration / max(lat, 1e-6),
+                "text": text[:60]}
     except Exception as e:
         print(f"  stt: FAILED ({e})")
         return None

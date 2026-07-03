@@ -262,6 +262,11 @@ class MovementManager:
         # Move queue (primary moves)
         self.move_queue: deque[Move] = deque()
 
+        # Composed-pose reuse cache for the static listening-idle state
+        # (worker-thread-local; see _compose_full_body_pose)
+        self._pose_cache: FullBodyPose | None = None
+        self._pose_cache_key = None
+
         # Configuration
         self.idle_inactivity_delay = 0.3  # seconds
         self.target_frequency = CONTROL_LOOP_FREQUENCY_HZ
@@ -561,8 +566,14 @@ class MovementManager:
 
         return primary_full_body_pose
 
-    def _get_secondary_pose(self) -> FullBodyPose:
-        """Get the secondary full body pose from speech and face tracking offsets."""
+    def _get_secondary_pose(self) -> FullBodyPose | None:
+        """Get the secondary full body pose from speech and face tracking offsets.
+
+        Returns None when every offset is exactly zero: composing an identity
+        offset is a no-op, and skipping it avoids a scipy Rotation build plus
+        an SVD reorthonormalization per tick (100Hz, GIL-holding) — the
+        common case whenever the robot isn't speaking or face-tracking.
+        """
         # Combine speech sway offsets + face tracking offsets for secondary pose
         secondary_offsets = [
             self.state.speech_offsets[0] + self.state.face_tracking_offsets[0],
@@ -572,6 +583,9 @@ class MovementManager:
             self.state.speech_offsets[4] + self.state.face_tracking_offsets[4],
             self.state.speech_offsets[5] + self.state.face_tracking_offsets[5],
         ]
+
+        if not any(secondary_offsets):
+            return None
 
         secondary_head_pose = create_head_pose(
             x=secondary_offsets[0],
@@ -586,9 +600,37 @@ class MovementManager:
         return (secondary_head_pose, (0.0, 0.0), 0.0)
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:
-        """Compose primary and secondary poses into a single command pose."""
+        """Compose primary and secondary poses into a single command pose.
+
+        In the dominant steady state (no move playing, offsets unchanged —
+        i.e. the robot sitting still, listening) the composed pose is
+        byte-identical tick to tick, so it is cached and reused. The cache
+        key includes the identity of last_primary_pose, which is replaced
+        whenever a move samples, so any motion invalidates it. set_target is
+        still issued every tick — only the numpy/scipy work is skipped.
+        The cached pose must be treated as read-only by consumers.
+        """
+        if self.state.current_move is None:
+            key = (
+                id(self.state.last_primary_pose),
+                self.state.speech_offsets,
+                self.state.face_tracking_offsets,
+            )
+            if self._pose_cache is not None and self._pose_cache_key == key:
+                return self._pose_cache
+            primary = self._get_primary_pose(current_time)
+            secondary = self._get_secondary_pose()
+            composed = primary if secondary is None else combine_full_body(primary, secondary)
+            self._pose_cache = composed
+            self._pose_cache_key = key
+            return composed
+
+        self._pose_cache = None
+        self._pose_cache_key = None
         primary = self._get_primary_pose(current_time)
         secondary = self._get_secondary_pose()
+        if secondary is None:
+            return primary
         return combine_full_body(primary, secondary)
 
     def _update_primary_motion(self, current_time: float) -> None:
@@ -673,7 +715,15 @@ class MovementManager:
         return sleep_time, stats
 
     def _record_frequency_snapshot(self, stats: LoopFrequencyStats) -> None:
-        """Store a thread-safe snapshot of current frequency statistics."""
+        """Store a thread-safe snapshot of current frequency statistics.
+
+        Throttled: a fresh snapshot object + lock acquisition per 100Hz tick
+        is pure overhead for a status readout polled every few seconds.
+        """
+        self._snapshot_skip = getattr(self, "_snapshot_skip", 0) + 1
+        if self._snapshot_skip < 10:
+            return
+        self._snapshot_skip = 0
         with self._status_lock:
             self._freq_snapshot = LoopFrequencyStats(
                 mean=stats.mean,

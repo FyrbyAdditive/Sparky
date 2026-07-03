@@ -37,6 +37,7 @@ class HeadWobbler:
         self._apply_offsets = set_speech_offsets
         self._base_ts: float | None = None
         self._hops_done: int = 0
+        self._was_swaying: bool = False
 
         self.audio_queue: (
             "queue.Queue[Tuple[int, int, NDArray[np.int16]]]"
@@ -108,9 +109,18 @@ class HeadWobbler:
             try:
                 chunk_generation, sr, chunk = queue_ref.get_nowait()
             except queue.Empty:
+                # Speech has drained: return the head to neutral once.
+                # Nothing else ever zeroes the sway offsets, so without this
+                # the head holds the last mid-sway offset forever (and the
+                # movement loop keeps composing a non-zero offset every tick).
+                if self._was_swaying:
+                    self._was_swaying = False
+                    self._apply_offsets((0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
                 # avoid while to never exit
                 time.sleep(MOVEMENT_LATENCY_S)
                 continue
+
+            self._was_swaying = True
 
             try:
                 with self._state_lock:

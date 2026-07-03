@@ -57,38 +57,73 @@ PERSONA = (
 )
 
 
-def _find_device_index(pa, name_substring: str, want_input: bool) -> int | None:
-    """Resolve a PyAudio device index by name substring; None = default.
-
-    When a name is specified, the device is REQUIRED: sound must go in and
-    out of the robot, never silently fall back to the host's mic/speakers.
-    (AUDIO_STRICT=false restores the old fallback for bench/dev setups.)
-    """
-    if not name_substring:
-        return None
-    kind = "input" if want_input else "output"
+def _scan(pa, name_substring: str, want_input: bool) -> int | None:
     for i in range(pa.get_device_count()):
         info = pa.get_device_info_by_index(i)
         channels = info.get("maxInputChannels" if want_input else "maxOutputChannels", 0)
         if channels > 0 and name_substring.lower() in str(info.get("name", "")).lower():
-            logger.info(f"Audio {kind}: [{i}] {info.get('name')}")
             return i
-    if os.getenv("AUDIO_STRICT", "true").strip().lower() != "false":
-        available = [str(pa.get_device_info_by_index(i).get("name")) for i in range(pa.get_device_count())]
-        raise SystemExit(
-            f"Audio {kind} device matching '{name_substring}' not found - refusing to fall "
-            f"back to this machine's default audio. Is the robot plugged in? "
-            f"Devices seen: {available}")
-    logger.warning(f"No audio {kind} device matching '{name_substring}', using default (AUDIO_STRICT=false)")
     return None
+
+
+def _resolve_audio_devices():
+    """Find the robot's audio devices, waiting for hotplug if absent.
+
+    Sound must go in and out of the robot — never silently fall back to
+    this machine's mic/speakers. If the named devices aren't present, poll
+    (PortAudio caches enumeration, so each retry uses a fresh instance) so
+    the robot can be plugged in after launch. AUDIO_STRICT=false restores
+    the old default-device fallback for bench/dev setups.
+
+    Returns (pyaudio_instance, input_index, output_index).
+    """
+    import pyaudio
+
+    in_name = os.getenv("AUDIO_IN_DEVICE", "").strip()
+    out_name = os.getenv("AUDIO_OUT_DEVICE", "").strip()
+    strict = os.getenv("AUDIO_STRICT", "true").strip().lower() != "false"
+    wait_cap = float(os.getenv("AUDIO_WAIT_SECS", "0")) or None  # None = wait forever
+
+    started = None
+    while True:
+        pa = pyaudio.PyAudio()
+        in_idx = _scan(pa, in_name, True) if in_name else None
+        out_idx = _scan(pa, out_name, False) if out_name else None
+        in_ok = (not in_name) or in_idx is not None
+        out_ok = (not out_name) or out_idx is not None
+        if in_ok and out_ok:
+            if in_idx is not None:
+                logger.info(f"Audio input: [{in_idx}] {pa.get_device_info_by_index(in_idx)['name']}")
+            if out_idx is not None:
+                logger.info(f"Audio output: [{out_idx}] {pa.get_device_info_by_index(out_idx)['name']}")
+            return pa, in_idx, out_idx
+
+        missing = [n for n, ok in ((in_name, in_ok), (out_name, out_ok)) if n and not ok]
+        available = sorted({str(pa.get_device_info_by_index(i).get("name")) for i in range(pa.get_device_count())})
+        pa.terminate()
+
+        if not strict:
+            logger.warning(f"Audio device(s) {missing} not found, using defaults (AUDIO_STRICT=false)")
+            import pyaudio as _pa
+            return _pa.PyAudio(), None, None
+
+        import time as _time
+        if started is None:
+            started = _time.monotonic()
+            logger.warning(f"Waiting for robot audio device(s) {missing} — is the robot plugged in? "
+                           f"Devices seen: {available}")
+        elif int(_time.monotonic() - started) % 15 < 3:
+            logger.warning(f"Still waiting for robot audio device(s) {missing}...")
+        if wait_cap and (_time.monotonic() - started) > wait_cap:
+            raise SystemExit(f"Robot audio device(s) {missing} did not appear within "
+                             f"{wait_cap:.0f}s. Devices seen: {available}")
+        _time.sleep(3)
 
 
 async def run_bot():
     logger.info("Starting Sparky (robot-native audio)")
 
-    import pyaudio
-
-    pa = pyaudio.PyAudio()
+    pa, in_idx, out_idx = _resolve_audio_devices()
     transport = DeepBufferedLocalAudioTransport(
         LocalAudioTransportParams(
             audio_in_enabled=True,
@@ -101,8 +136,8 @@ async def run_bot():
                 params=VADParams(stop_secs=float(os.getenv("VAD_STOP_SECS", "0.6")))
             ),
             turn_analyzer=LocalSmartTurnAnalyzerV3(),
-            input_device_index=_find_device_index(pa, os.getenv("AUDIO_IN_DEVICE", ""), True),
-            output_device_index=_find_device_index(pa, os.getenv("AUDIO_OUT_DEVICE", ""), False),
+            input_device_index=in_idx,
+            output_device_index=out_idx,
         )
     )
 

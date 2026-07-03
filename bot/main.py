@@ -58,17 +58,28 @@ PERSONA = (
 
 
 def _find_device_index(pa, name_substring: str, want_input: bool) -> int | None:
-    """Resolve a PyAudio device index by name substring; None = default."""
+    """Resolve a PyAudio device index by name substring; None = default.
+
+    When a name is specified, the device is REQUIRED: sound must go in and
+    out of the robot, never silently fall back to the host's mic/speakers.
+    (AUDIO_STRICT=false restores the old fallback for bench/dev setups.)
+    """
     if not name_substring:
         return None
+    kind = "input" if want_input else "output"
     for i in range(pa.get_device_count()):
         info = pa.get_device_info_by_index(i)
         channels = info.get("maxInputChannels" if want_input else "maxOutputChannels", 0)
         if channels > 0 and name_substring.lower() in str(info.get("name", "")).lower():
-            logger.info(f"Audio {'input' if want_input else 'output'}: [{i}] {info.get('name')}")
+            logger.info(f"Audio {kind}: [{i}] {info.get('name')}")
             return i
-    logger.warning(f"No audio {'input' if want_input else 'output'} device matching "
-                   f"'{name_substring}', using default")
+    if os.getenv("AUDIO_STRICT", "true").strip().lower() != "false":
+        available = [str(pa.get_device_info_by_index(i).get("name")) for i in range(pa.get_device_count())]
+        raise SystemExit(
+            f"Audio {kind} device matching '{name_substring}' not found - refusing to fall "
+            f"back to this machine's default audio. Is the robot plugged in? "
+            f"Devices seen: {available}")
+    logger.warning(f"No audio {kind} device matching '{name_substring}', using default (AUDIO_STRICT=false)")
     return None
 
 

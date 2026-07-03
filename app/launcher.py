@@ -176,8 +176,9 @@ def main():
     env = read_env()
 
     if not robot_present():
-        say("⚠ No Reachy Mini detected on this machine (USB). Plug it in and relaunch,")
-        say("  or continue without the robot (voice via this machine's default audio).")
+        say("⚠ No Reachy Mini detected on this machine (USB).")
+        say("  Sound only goes in and out of the robot - without it there is no voice.")
+        say("  Plug the robot in and relaunch (or continue for panel-only testing).")
         if input("  Continue anyway? [y/N]: ").strip().lower() != "y":
             sys.exit(1)
 

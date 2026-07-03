@@ -18,17 +18,19 @@ A profile is two small env files — nothing else changes between model setups:
 | `unified-1spark` | 1 | Qwen3.6-35B-A3B-NVFP4 (MTP) | same model (multimodal) | Fastest; one endpoint serves every role |
 | `quality-2spark-split` | 2 | Nemotron-3-Super-120B-A12B-NVFP4 (MTP) on A | 12B-v2-VL on B | Best quality with predictable latency |
 | `max-2spark-tp2` | 2 | Qwen3-235B-A22B-FP4, TP=2 over RoCE | 12B-v2-VL on B | Maximum quality; see `deploy/tp2/` + `interconnect.md` |
+| **`duo-2spark`** (current) | 2 | Qwen3.6-35B NVFP4+MTP on shodan (fraction 0.65, 65k ctx) | same model | Audio (Riva/Kokoro/panel) on the robot host; inference + full wiki index on the other Spark over the 200GbE link |
 
 ## Usage
 
 ```bash
-# Spark A
-cd deploy/spark-a && docker compose --env-file ../profiles/parity-1spark.env up -d --build
-# Spark B (2-Spark profiles only)
-cd deploy/spark-b && docker compose --env-file ../profiles/quality-2spark-split.env up -d --build
+# Any host: the consolidated stack + a profile env file selecting its roles
+cd deploy/stack && docker compose --env-file ../profiles/duo-2spark.env up -d --build      # inference host
+cd deploy/stack && docker compose --env-file ../profiles/duo-2spark-magi.env up -d         # robot/audio host
 # Bot host
-cp deploy/profiles/parity-1spark.bot.env .env   # then set SPARK_A_HOST
+cp deploy/profiles/duo-2spark.bot.env .env
 ```
+(Roles: audio / llm / vision / wiki — combine freely for single-Spark setups.
+The legacy spark-a/spark-b directories are superseded by deploy/stack.)
 
 ## Adding a profile (e.g. a faster or newer model)
 

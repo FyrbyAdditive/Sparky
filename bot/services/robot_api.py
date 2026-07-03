@@ -50,6 +50,14 @@ def get_speaker_name(tag: int) -> str | None:
     return _speaker_names.get(tag)
 
 
+def _camera_state() -> dict:
+    try:
+        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        return {"resolution": CAMERA["resolution"], "options": CAMERA_RESOLUTIONS}
+    except Exception:
+        return {}
+
+
 def set_speaker_name(tag: int, name: str):
     """Register a name for a speaker tag (pipeline-side helper)."""
     _speaker_names[tag] = name
@@ -140,6 +148,10 @@ class SpeakerNameRequest(BaseModel):
     # display-number form as users see it: 1, "1", "Speaker 1"
     speaker: int | str
     name: str = ""
+
+
+class CameraRequest(BaseModel):
+    resolution: str
 
 
 class LookAtRequest(BaseModel):
@@ -288,6 +300,7 @@ def _build_app() -> FastAPI:
             "audio": audio,
             "session_active": _session["task"] is not None,
             "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
+            "camera": _camera_state(),
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),
                 "router": os.getenv("ROUTER_LLM_MODEL", "?"),
@@ -309,6 +322,25 @@ def _build_app() -> FastAPI:
             pass
         finally:
             _ws_queues.discard(q)
+
+    # --- camera capture settings ---
+
+    @app.get("/camera")
+    def camera():
+        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        return {"ok": True, "resolution": CAMERA["resolution"],
+                "options": CAMERA_RESOLUTIONS}
+
+    @app.post("/camera")
+    def set_camera(req: CameraRequest):
+        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        value = req.resolution.strip().lower()
+        if value not in CAMERA_RESOLUTIONS:
+            return {"ok": False, "error": "unknown resolution",
+                    "options": CAMERA_RESOLUTIONS}
+        CAMERA["resolution"] = value  # capture reopens on next vision request
+        logger.info(f"Camera capture resolution set to {value}")
+        return {"ok": True, "resolution": value}
 
     # --- speaker registry (diarization) ---
 

@@ -123,13 +123,21 @@ class NATVisionLLMService(NvidiaLLMService):
         Only the current frame should travel with the request: history images
         grow the prompt every turn and vLLM rejects prompts over its
         images-per-prompt limit (the robot then goes silent).
+
+        Only messages that actually contain an image are rewritten — a
+        blanket rewrite of every list-content message is O(history) work per
+        turn and would destroy future non-image content types.
         """
         for msg in messages:
             content = msg.get("content")
-            if isinstance(content, list):
-                texts = [p.get("text", "") for p in content
-                         if isinstance(p, dict) and p.get("type") == "text"]
-                msg["content"] = " ".join(t for t in texts if t)
+            if not isinstance(content, list):
+                continue
+            if not any(isinstance(p, dict) and p.get("type") == "image_url"
+                       for p in content):
+                continue
+            texts = [p.get("text", "") for p in content
+                     if isinstance(p, dict) and p.get("type") == "text"]
+            msg["content"] = " ".join(t for t in texts if t)
 
     def _add_image_to_context(self, context, image_data_url: str, user_message: str):
         """

@@ -5,6 +5,11 @@ bot co-located with the robot, the robot's USB camera is the natural eye:
 this processor intercepts the UserImageRequestFrame that NATVisionLLMService
 sends upstream and answers it with a frame captured from the robot camera,
 so the browser never needs camera permission (VISION_SOURCE=robot).
+
+Capture resolution is a runtime setting (panel: Camera section -> POST
+/camera). The vision model receives a <=256px image, so the 640x480 default
+is pixel-equivalent to full 1080p while avoiding a ~6MB convert+copy per
+request; higher options exist for when the source detail matters.
 """
 
 import asyncio
@@ -15,23 +20,48 @@ from loguru import logger
 from pipecat.frames.frames import Frame, UserImageRawFrame, UserImageRequestFrame
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
+CAMERA_RESOLUTIONS = ["320x240", "640x480", "1280x720", "1920x1080"]
+
+# Shared with robot_api (same cross-thread pattern as the speaker registry):
+# the panel writes, the capture path reads and reopens on change.
+CAMERA = {"resolution": os.getenv("CAMERA_RESOLUTION", "640x480")}
+
+
+def _parse_resolution(value: str) -> tuple[int, int] | None:
+    try:
+        w, h = value.lower().split("x")
+        return int(w), int(h)
+    except (ValueError, AttributeError):
+        return None
+
 
 class RobotCameraResponder(FrameProcessor):
     def __init__(self, device_index: int | None = None):
         super().__init__()
         self._device_index = device_index if device_index is not None else int(os.getenv("ROBOT_CAMERA_INDEX", "0"))
         self._capture = None
+        self._applied_resolution: str | None = None
 
     def _open(self):
         import cv2
 
+        wanted = CAMERA["resolution"]
         if self._capture is not None and self._capture.isOpened():
-            return True
+            if self._applied_resolution == wanted:
+                return True
+            # resolution changed from the panel: reopen with the new mode
+            self._capture.release()
+            self._capture = None
         self._capture = cv2.VideoCapture(self._device_index)
         if not self._capture.isOpened():
             logger.warning(f"RobotCameraResponder: cannot open camera {self._device_index}")
             self._capture = None
             return False
+        parsed = _parse_resolution(wanted)
+        if parsed:
+            self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, parsed[0])
+            self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, parsed[1])
+        self._applied_resolution = wanted
         return True
 
     def _grab(self):

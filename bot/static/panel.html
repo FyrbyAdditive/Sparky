@@ -93,6 +93,12 @@
       <div id="anims"></div>
     </section>
     <section>
+      <h2>Camera</h2>
+      <div class="row" style="align-items:center">
+        <select id="camRes" style="flex:1;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font-size:14px"></select>
+      </div>
+    </section>
+    <section>
       <h2>Services</h2>
       <div id="services"></div>
       <div id="models"></div>
@@ -201,6 +207,23 @@ async function loadVolume() {
   } catch (e) {}
 }
 
+let camResLoaded = false;
+function syncCamera(cam) {
+  if (!cam || !cam.options || !cam.options.length) return;
+  const sel = $('camRes');
+  if (!camResLoaded) {
+    sel.innerHTML = '';
+    cam.options.forEach(r => {
+      const o = document.createElement('option');
+      o.value = r; o.textContent = r.replace('x', ' × ');
+      sel.appendChild(o);
+    });
+    sel.onchange = () => post('/camera', {resolution: sel.value});
+    camResLoaded = true;
+  }
+  if (document.activeElement !== sel) sel.value = cam.resolution;
+}
+
 async function loadAnimations() {
   const r = await fetch('robot/animations').then(r => r.json());
   $('anims').innerHTML = '';
@@ -236,6 +259,7 @@ async function refreshStatus() {
       sv.appendChild(c);
     }
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
+    syncCamera(s.camera);
     if (s.muted !== muted) setMuted(s.muted);
   } catch (e) { /* panel keeps trying */ }
 }

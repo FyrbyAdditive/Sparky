@@ -43,6 +43,8 @@
   #dpad button { padding:0; }
   #dpad .blank { visibility:hidden; }
   #muteBtn.muted { background:var(--bad); border-color:var(--bad); color:#fff; }
+  #muteBanner { display:none; background:var(--bad); color:#fff; font-weight:700;
+                padding:10px 16px; text-align:center; cursor:pointer; }
   #services { display:flex; flex-wrap:wrap; gap:6px; }
   #models { font-size:12px; color:var(--dim); margin-top:6px; word-break:break-all; }
 </style>
@@ -55,6 +57,7 @@
   <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
   <button id="estopBtn" title="Emergency stop: halt motion, release motors, mute" style="background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700">■ STOP</button>
 </header>
+<div id="muteBanner" title="Click to unmute">🔇 MIC MUTED — the robot cannot hear you. Click here to unmute.</div>
 <main>
   <div id="left">
     <div id="transcript"></div>
@@ -144,17 +147,32 @@ function play(name) { post('/robot/play_animation', {name}); }
 
 $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 $('speakText').addEventListener('keydown', e => { if (e.key === 'Enter') sendSpeak(); });
+// Mute state is server-authoritative: the UI only ever reflects what the
+// bot confirms. A blind local toggle desyncs across tabs/reloads and left
+// the robot silently deaf for half-hour stretches.
+function setMuted(m) {
+  muted = !!m;
+  $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
+  $('muteBtn').classList.toggle('muted', muted);
+  $('muteBanner').style.display = muted ? 'block' : 'none';
+}
+async function setMute(target) {
+  const r = await post('/mute', {muted: target});
+  if (r && r.ok) setMuted(r.muted);
+}
 $('estopBtn').onclick = async () => {
+  $('estopBtn').blur();  // drop focus so Space/Enter can't re-trigger it
   if (!confirm('Emergency stop: halt all motion and release the motors?')) return;
   await post('/estop', {});
   $('estopBtn').textContent = '■ STOPPED';
+  setMuted(true);
 };
-$('muteBtn').onclick = async () => {
-  muted = !muted;
-  await post('/mute', {muted});
-  $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
-  $('muteBtn').classList.toggle('muted', muted);
+$('muteBtn').onclick = () => {
+  $('muteBtn').blur();  // focused buttons re-click on Space/Enter — the
+                        // phantom-toggle that kept muting the robot
+  setMute(!muted);
 };
+$('muteBanner').onclick = () => setMute(false);
 
 let volTimer = null;
 $('volume').addEventListener('input', e => {
@@ -204,11 +222,7 @@ async function refreshStatus() {
       sv.appendChild(c);
     }
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
-    if (s.muted !== muted) {
-      muted = s.muted;
-      $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
-      $('muteBtn').classList.toggle('muted', muted);
-    }
+    if (s.muted !== muted) setMuted(s.muted);
   } catch (e) { /* panel keeps trying */ }
 }
 
@@ -217,6 +231,10 @@ loadAnimations();
 loadVolume();
 refreshStatus();
 setInterval(refreshStatus, 10000);
+// stale tabs are how the mute state went missing — resync on focus
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshStatus();
+});
 </script>
 </body>
 </html>

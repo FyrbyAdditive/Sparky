@@ -31,7 +31,7 @@ functions:
       _type: router
       route_config:
         - name: other
-          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes requests for the robot to move or gesture, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is.
+          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes ANY request involving a physical action or gesture, even mixed with a question or other request, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep, nod while answering. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is.
         - name: chit_chat
           description: Any simple chit chat, small talk, or casual conversation.
         - name: image_understanding

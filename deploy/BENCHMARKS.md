@@ -104,3 +104,20 @@ Lessons: engine carries ~30GB host-side overhead beyond its GPU fraction
 everything to fit boot storms). Router placed WITH NAT on the robot host
 (tiny + fastest routing hop). Rollback: flip .env + docker start the
 stopped magi containers.
+
+## Final audio architecture (2026-07-03, v0.4-duo-smooth-voice — Tim: "this is good")
+
+Output path (bot/services/local_audio.py DeepBufferedOutput):
+- 100ms device buffers (write-jitter tolerance)
+- 300ms utterance pre-roll (PREROLL_MS) — absorbs TTS synthesis-cadence gaps
+- idle stream PAUSE after 1s (never inject silence: a feeder that filled
+  gaps also filled mid-utterance gaps = constant stutter; a stopped stream
+  can neither underrun nor stutter)
+- reopen-on-failure (PortAudio host errors no longer mute the robot)
+Input: ResilientAudioInput — direct hw mic, own PortAudio instance, 100ms
+buffers, 8s stall watchdog, capture-callback mute gate.
+GPU note: Kokoro synthesis bursts magi's GPU to 96% during speech; the
+buffering rides it out. If variable stutter ever returns, move Kokoro to
+the inference host (costs ~1ms over the link).
+Process lesson: hash-verify every deploy (a --relative rsync silently
+left main.py stale; three "staged tests" ran phantom configurations).

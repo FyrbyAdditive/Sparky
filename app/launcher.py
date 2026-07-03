@@ -211,7 +211,10 @@ def sweep_leftovers():
     instances fight over the robot and can grab the wrong audio device."""
     import re
 
-    patterns = ["reachy_mini.daemon", "bot/main.py", "python main.py", "nat serve"]
+    # NB "python3 main.py" — the venv interpreter is python3; a "python "
+    # pattern missed orphaned bots and let a stale instance hold the ports
+    patterns = ["reachy_mini.daemon", "bot/main.py", "python main.py",
+                "python3 main.py", "nat serve"]
     out = subprocess.run(["ps", "-axo", "pid,command"], capture_output=True, text=True).stdout
     me = os.getpid()
     for line in out.splitlines():

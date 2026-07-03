@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=%h/Sparky/bot
-ExecStart=%h/.local/bin/uv run -m reachy_mini.daemon.app.main --no-localhost-only
+ExecStart=%h/.local/bin/uv run -m reachy_mini.daemon.app.main --no-localhost-only --deactivate-audio
 Restart=always
 RestartSec=5
 

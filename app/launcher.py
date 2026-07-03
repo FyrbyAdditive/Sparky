@@ -209,8 +209,12 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     env_file = str(ENV_FILE)
+    # --deactivate-audio: the BOT owns the robot's mic/speaker exclusively;
+    # without it the daemon plays wake sounds through the host's DEFAULT
+    # output — i.e. the computer's speakers on a laptop.
     start_child("daemon",
-                [UV, "run", "-m", "reachy_mini.daemon.app.main", "--no-localhost-only"],
+                [UV, "run", "-m", "reachy_mini.daemon.app.main",
+                 "--no-localhost-only", "--deactivate-audio"],
                 REPO / "bot", "http://127.0.0.1:8000/")
     start_child("nat",
                 [UV, "run", "--env-file", env_file, "nat", "serve",

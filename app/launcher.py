@@ -29,7 +29,8 @@ REPO = Path(__file__).resolve().parent.parent
 CONFIG_DIR = Path.home() / ".sparky"
 ENV_FILE = CONFIG_DIR / "remote.env"
 TEMPLATE = REPO / "deploy" / "profiles" / "remote-client.bot.env"
-UV = shutil.which("uv") or str(Path.home() / ".local/bin/uv")
+_local_uv = Path.home() / ".local/bin/uv"
+UV = str(_local_uv) if _local_uv.exists() else (shutil.which("uv") or "uv")
 
 children: list[tuple[str, subprocess.Popen]] = []
 paused_spark_bot = {"host": None, "user": None}
@@ -91,7 +92,7 @@ def read_env() -> dict:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            env[k] = v
+            env[k] = v.strip().strip("\'\"")
     return env
 
 
@@ -141,10 +142,13 @@ def restore_spark_bot():
         paused_spark_bot["host"] = None
 
 
-def start_child(name, cmd, cwd, health_url, timeout=180) -> subprocess.Popen:
+def start_child(name, cmd, cwd, health_url, timeout=180, extra_env=None) -> subprocess.Popen:
     say(f"Starting {name}...")
     log = open(CONFIG_DIR / f"{name}.log", "a")
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
+    child_env = dict(os.environ)
+    if extra_env:
+        child_env.update(extra_env)
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=child_env)
     children.append((name, proc))
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -217,12 +221,12 @@ def main():
                  "--no-localhost-only", "--deactivate-audio"],
                 REPO / "bot", "http://127.0.0.1:8000/")
     start_child("nat",
-                [UV, "run", "--env-file", env_file, "nat", "serve",
+                [UV, "run", "nat", "serve",
                  "--config_file", "src/ces_tutorial/config.yml", "--port", "8001"],
-                REPO / "nat", "http://127.0.0.1:8001/docs")
+                REPO / "nat", "http://127.0.0.1:8001/docs", extra_env=env)
     start_child("bot",
-                [UV, "run", "--env-file", env_file, "python", "main.py"],
-                REPO / "bot", "http://127.0.0.1:7861/health")
+                [UV, "run", "python", "main.py"],
+                REPO / "bot", "http://127.0.0.1:7861/health", extra_env=env)
 
     say("All up — opening the control panel. The robot should greet you.")
     webbrowser.open("http://localhost:7861/")

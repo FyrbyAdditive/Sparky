@@ -31,7 +31,8 @@ _started = False
 _lock = threading.Lock()
 
 # Set by attach_session() once the pipeline exists
-_session = {"loop": None, "task": None, "messages": None, "mic_gate": None}
+_session = {"loop": None, "task": None, "messages": None, "mic_gate": None,
+            "stt": None}
 
 # Transcript fan-out (owned by the API server's event loop)
 _api_loop: asyncio.AbstractEventLoop | None = None
@@ -133,9 +134,10 @@ def _animation_audio_frames(name: str) -> list:
     return frames
 
 
-def attach_session(loop, task, messages, mic_gate):
+def attach_session(loop, task, messages, mic_gate, stt=None):
     """Called from the bot once the pipeline is built."""
-    _session.update(loop=loop, task=task, messages=messages, mic_gate=mic_gate)
+    _session.update(loop=loop, task=task, messages=messages, mic_gate=mic_gate,
+                    stt=stt)
     logger.info("Control panel: session attached")
 
 
@@ -240,6 +242,30 @@ def _build_app() -> FastAPI:
         gate.set_muted(req.muted)
         return {"ok": True, "muted": req.muted}
 
+    @app.get("/language")
+    def get_language():
+        stt = _session["stt"]
+        return {"ok": stt is not None,
+                "language": getattr(stt._settings, "language", None) if stt else None}
+
+    @app.post("/language")
+    def set_language(req: TextRequest):
+        """Pin the ASR language ("sv-SE", "en-US", ...) or return to "auto"
+        (automatic language ID). The conditioning is per gRPC stream, so a
+        reconnect applies it; sortformer speaker tags restart from 1."""
+        import re as _re
+
+        stt, loop = _session["stt"], _session["loop"]
+        code = req.text.strip()
+        if stt is None or loop is None:
+            return {"ok": False, "error": "no_session"}
+        if code != "auto" and not _re.fullmatch(r"[a-z]{2}-[A-Z]{2}", code):
+            return {"ok": False, "error": "bad_code"}
+        stt._settings.language = code
+        asyncio.run_coroutine_threadsafe(stt._request_reconnect(), loop)
+        logger.info(f"ASR language set to {code} (stream reconnecting)")
+        return {"ok": True, "language": code}
+
     @app.get("/volume")
     def get_volume():
         # software gain in the bot's output path: platform-independent
@@ -329,6 +355,8 @@ def _build_app() -> FastAPI:
             "audio": audio,
             "session_active": _session["task"] is not None,
             "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
+            "asr_language": (getattr(_session["stt"]._settings, "language", None)
+                             if _session["stt"] else None),
             "camera": _camera_state(),
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),

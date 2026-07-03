@@ -66,13 +66,13 @@ class EmotionResult:
 
 
 _GREETING_RE = re.compile(
-    r"\b(hi|hello|hey|howdy|good\s+(morning|afternoon|evening)|what'?s\s+up|yo)\b", re.I
+    r"\b(hi|hello|hey|howdy|good\s+(morning|afternoon|evening)|what'?s\s+up|yo|hej|hejsan|tjena|god\s*morgon|god\s*kväll)\b", re.I
 )
 _FAREWELL_RE = re.compile(
-    r"\b(bye|goodbye|see\s+you|later|good\s*night|take\s+care)\b", re.I
+    r"\b(bye|goodbye|see\s+you|later|good\s*night|take\s+care|hejdå|hej\s*då|vi\s+ses|ha\s+det)\b", re.I
 )
 _GRATEFUL_RE = re.compile(
-    r"\b(thanks?|thank\s+you|appreciate|grateful)\b", re.I
+    r"\b(thanks?|thank\s+you|appreciate|grateful|tack|tackar)\b", re.I
 )
 
 

@@ -192,6 +192,11 @@
   <span id="sessionChip" class="chip">session: …</span>
   <div id="headerRight">
     <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
+    <select id="langSel" title="Speech recognition language — Auto detects among 40; pinning is markedly more accurate for one-language sessions">
+      <option value="auto">🌐 Auto</option>
+      <option value="en-US">English</option>
+      <option value="sv-SE">Svenska</option>
+    </select>
     <div id="volWrap" title="Robot speaker volume">
       <span>🔊</span>
       <input id="volume" type="range" min="0" max="120" step="5">
@@ -339,6 +344,12 @@ $('muteBtn').onclick = () => {
 };
 $('muteBanner').onclick = () => setMute(false);
 
+/* ---------- ASR language (top bar) ---------- */
+$('langSel').onchange = async e => {
+  e.target.blur();
+  await post('/language', {text: e.target.value});
+};
+
 /* ---------- volume (top bar; only shown when the backend supports it) ---------- */
 let volTimer = null;
 $('volume').addEventListener('input', e => {
@@ -462,6 +473,8 @@ async function refreshStatus() {
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     syncCamera(s.camera);
     syncSpeakers(s.speakers);
+    if (s.asr_language && document.activeElement !== $('langSel')
+        && $('langSel').value !== s.asr_language) $('langSel').value = s.asr_language;
     if (s.muted !== muted) setMuted(s.muted);
   } catch (e) { /* panel keeps trying */ }
 }

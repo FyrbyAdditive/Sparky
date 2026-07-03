@@ -48,7 +48,7 @@ functions:
       tool_names: [wikipedia_search, play_animation, look_at, remember_speaker_name]
       # Images are redacted on this route (a separate vision route sees them);
       # without this the model tells users it has no camera.
-      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body.
+      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body. Always write your Final Answer in the same language the user spoke (Swedish input gets a Swedish answer); tool calls and their arguments stay in English. Only store a speaker's name when they clearly and deliberately state it as their name; if an utterance is garbled or ambiguous, ask again instead of storing a guess.
 
 # All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
 # model names come from the environment so model profiles can swap them

@@ -85,6 +85,9 @@ services:
       - NGC_API_KEY=${NGC_API_KEY:?NGC key needed to initialize the NIM}
       - NIM_HTTP_API_PORT=9000
       - NIM_GRPC_API_PORT=50051
+      # multi = Nemotron 3.5 multilingual (40 locales incl. sv-SE) WITH the
+      # sortformer diarizer; en-US selects the English-only profile
+      - NIM_TAGS_SELECTOR=${ASR_PROFILE_TAGS:-type=multi,batch_size=64}
     ports:
       - "50051:50051"
       - "9000:9000"

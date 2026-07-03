@@ -30,8 +30,11 @@ from .robot_api import get_speaker_name, set_speaker_name
 # capitalized (a blanket IGNORECASE would let "i am hungry" register "hungry").
 # ASR punctuation lands mid-phrase ("My name. Is Daniel?"), so allow ., ,
 # between the words.
+_NAME = r"([A-ZÅÄÖÆØÉÜ][A-Za-zÅÄÖåäöÆØæøÉéÜüÍíÓó'\-]{1,20})"
 _INTRO_RE = re.compile(
-    r"\b(?:[Mm]y name[.,]?\s*(?:[Ii]s|'s)|[Cc]all me|[Ii] am|[Ii]'m)[.,]?\s+([A-Z][a-zA-Z'\-]{1,20})")
+    r"\b(?:[Mm]y name[.,]?\s*(?:[Ii]s|'s)|[Cc]all me|[Ii] am|[Ii]'m"
+    # Swedish introductions
+    r"|[Jj]ag heter|[Mm]itt namn är|[Kk]alla mig)[.,]?\s+" + _NAME)
 
 
 class SpeakerLabelerProcessor(FrameProcessor):

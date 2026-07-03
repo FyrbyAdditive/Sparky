@@ -167,3 +167,48 @@ median** (speculative chitchat starts concurrently with the router call;
 loser cancelled; prefix caching absorbs repeated prefill). Vision turns
 prefetch the camera at speech onset, removing the grab+encode from the
 post-speech critical path. Boot warmup pre-caches the persona prefill.
+
+## 2026-07-03 — multilingual ASR: Nemotron 3.5 multi profile + Swedish (Phase A)
+
+ASR switched to the NIM's `type=multi` profile (same 1.2.0 image — the
+"incompatible" marking on multi profiles was only NIM_TAGS_SELECTOR
+filtering; loaded profile `multi-bs64-26.06.1`, sortformer diarizer
+intact): 40 locales, `language_code=auto` = automatic language ID.
+The server registers all 40 locale codes plus `auto` on one model;
+"multi" is not a valid code and comma lists are rejected.
+
+Direct-stream checks against magi:50051 (bypassing the robot mic):
+
+| input | config | result |
+|---|---|---|
+| FLEURS sv-SE (real human speech) | auto | near-word-perfect Swedish; LID picks Swedish |
+| FLEURS sv-SE (real human speech) | sv-SE pinned | near-word-perfect (broad-coverage tier: ~2 minor word errors/sentence) |
+| say -v Daniel (synthetic en-GB) | auto | word-perfect |
+| say -v Alva (synthetic sv) | auto | UNUSABLE — LID misfires (Korean/Norwegian fragments); pinned sv-SE often empty. Synthetic macOS Swedish is not a valid test signal; the model is fine on real speech. |
+
+Word boosting at pipecat's default score 4.0 corrupts the multi profile's
+decode outright ("Hello" -> "Sparky nodly"); at 1.0 it still fixes
+"Sparty" -> "Sparky" and leaves Swedish decodes untouched. New env:
+RIVA_BOOST_SCORE (default 1.0), ASR_LANGUAGE (default auto).
+
+Live E2E (roaming rig: robot on the Mac, Mac speakers -> robot mic,
+ASR/TTS on magi, LLM on shodan): English regression clean (word-perfect
+transcript, ask-name behavior fires); real Swedish audio -> Swedish
+transcript, distinct diarization tag, spoken reply IN SWEDISH; typed
+"Vad är huvudstaden i Sverige?" -> "Huvudstaden i Sverige är Stockholm.";
+"Nicka med huvudet." -> deterministic action route + physical nod.
+Kokoro has no Swedish voice, so Swedish replies speak with English
+phonology until a Swedish TTS lands (Phase B — on hold pending a
+fidelity comparison of options).
+
+Addendum (same night, after live Swedish testing): the model conditions its
+OUTPUT language per stream (`target_lang` in the HF card; the NIM maps
+`language_code` onto it — verified: adding `custom_configuration
+target_lang:auto` changes nothing when language_code=auto, and pinning
+en-US + target_lang:auto is worse). Auto mode with diarization+boost still
+decodes Swedish as Swedish on long clean utterances, but live short
+utterances through the robot mic bias toward English. Fix shipped: ASR
+language switch in the panel top bar (Auto / English / Svenska) → POST
+/language re-conditions the stream via reconnect. Pinned sv-SE E2E through
+speakers→robot mic: correct Swedish transcript, Swedish reply. NB speaker
+tags restart at 1 after a language switch (new gRPC stream).

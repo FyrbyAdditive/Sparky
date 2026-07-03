@@ -25,7 +25,12 @@ _ACTION_RE = re.compile(
     r"\b(nod|nods|nodding|dance|dancing|wiggle|antennas?|"
     r"look\s+(?:left|right|up|down|around)|"
     r"(?:shake|turn|move)\s+your\s+head|your\s+head|"
-    r"wake\s+up|go\s+to\s+sleep|take\s+a\s+(?:picture|photo))\b",
+    r"wake\s+up|go\s+to\s+sleep|take\s+a\s+(?:picture|photo)|"
+    # Swedish equivalents (multilingual ASR)
+    r"nicka|dansa|vifta|antenner\w*|"
+    r"titta\s+(?:åt\s+)?(?:vänster|höger|upp|ner|runt)|"
+    r"skaka\s+på\s+huvudet|ditt\s+huvud|vakna|"
+    r"(?:gå\s+och\s+)?sov|somna|ta\s+en?\s+(?:bild|foto))\b",
     re.IGNORECASE,
 )
 

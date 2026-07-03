@@ -97,7 +97,8 @@ PERSONA = (
     "descriptions or asterisks like nodding or waving — your body only moves "
     "through your movement tools. You genuinely can move (nod, look around, "
     "wiggle your antennas, dance): never tell anyone you are unable to move "
-    "or that you lack a body."
+    "or that you lack a body. Always reply in the same language the user "
+    "spoke to you in."
 )
 
 
@@ -303,11 +304,27 @@ async def run_bot():
             diarization_max_speakers=int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4")),
             word_time_offsets=True,  # tags ride on words[]; keep it populated
             # domain words the ASR kept mishearing ("nod" -> "not"); boosting
-            # biases the decoder toward them without other quality impact
+            # biases the decoder toward them without other quality impact.
+            # Under a non-English fixed language only the robot's name is
+            # boosted (English words would bias a Swedish decode).
             boosted_lm_words=[w for w in os.getenv(
-                "RIVA_BOOSTED_WORDS", "nod,Sparky,antennas,wiggle").split(",") if w],
+                "RIVA_BOOSTED_WORDS",
+                "nod,Sparky,antennas,wiggle"
+                if os.getenv("ASR_LANGUAGE", "auto").startswith(("en", "auto"))
+                else "Sparky").split(",") if w],
+            # pipecat's default score of 4.0 corrupts the multilingual
+            # model's decode outright ("Hello" -> "Sparky nodly"); 1.0 still
+            # fixes "Sparty"->"Sparky" and leaves Swedish decodes untouched
+            # (verified against FLEURS samples).
+            boosted_lm_score=float(os.getenv("RIVA_BOOST_SCORE", "1.0")),
         ),
     )
+    # Language seam: the multilingual NIM profile does automatic language ID
+    # with language_code "auto" (or a fixed code like sv-SE / en-US — the
+    # server registers all 40 locales plus "auto" on the one model).
+    # pipecat's Nemotron language map predates the multi profile, so the
+    # resolved string is set directly. ASR_LANGUAGE env overrides.
+    stt._settings.language = os.getenv("ASR_LANGUAGE", "auto")
 
     # Streaming TTS from the local Kokoro-FastAPI server.
     tts = KokoroTTSService(
@@ -368,12 +385,14 @@ async def run_bot():
         idle_timeout_secs=(int(os.getenv("BOT_IDLE_TIMEOUT_SECS", "0")) or None),
     )
 
-    # Hand the panel what it needs to inject typed turns / verbatim speech.
+    # Hand the panel what it needs to inject typed turns / verbatim speech,
+    # and the STT service for the language switch (pin sv-SE / back to auto).
     attach_session(
         loop=asyncio.get_running_loop(),
         task=task,
         messages=messages,
         mic_gate=mic_gate,
+        stt=stt,
     )
 
     # Warm shodan's prefix cache before the first real turn: one throwaway

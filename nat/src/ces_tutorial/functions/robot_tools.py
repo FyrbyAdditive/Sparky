@@ -30,16 +30,17 @@ async def robot_play_animation_fn(config: PlayAnimationConfig, builder: Builder)
     import httpx
 
     base_url = config.base_url.rstrip("/")
+    # one client for the workflow's lifetime — per-call clients redo TCP setup
+    client = httpx.AsyncClient(timeout=10.0)
 
     async def _play(animation_name: str) -> str:
         name = animation_name.strip().strip("'\"")
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    f"{base_url}/robot/play_animation", json={"name": name}
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await client.post(
+                f"{base_url}/robot/play_animation", json={"name": name}
+            )
+            response.raise_for_status()
+            data = response.json()
         except Exception as e:
             logger.error(f"play_animation tool failed: {e}")
             return f"Could not reach the robot ({e})."
@@ -51,18 +52,21 @@ async def robot_play_animation_fn(config: PlayAnimationConfig, builder: Builder)
             return f"Unknown animation '{name}'. Available animations: {available}"
         return "The robot is not connected right now, so the animation could not be played."
 
-    yield FunctionInfo.from_fn(
-        _play,
-        description=(
-            "Play an expressive animation on the robot body. Input is one animation "
-            "name from: nod, attentive, intrigued5, antennaSmallWiggle, "
-            "antennaLargeWiggle, lookAroundShort, scan, listen1, talking, "
-            "talkingLeftShoulder, talkingRightShoulder, wakeUp1, sleep3, focus, "
-            "idle3old, takePicture, picturePreparation. Use when the user asks the "
-            "robot to move, dance, nod, wiggle its antennas, look around, wake up, "
-            "or go to sleep, or to add physical expression to a response."
-        ),
-    )
+    try:
+        yield FunctionInfo.from_fn(
+            _play,
+            description=(
+                "Play an expressive animation on the robot body. Input is one animation "
+                "name from: nod, attentive, intrigued5, antennaSmallWiggle, "
+                "antennaLargeWiggle, lookAroundShort, scan, listen1, talking, "
+                "talkingLeftShoulder, talkingRightShoulder, wakeUp1, sleep3, focus, "
+                "idle3old, takePicture, picturePreparation. Use when the user asks the "
+                "robot to move, dance, nod, wiggle its antennas, look around, wake up, "
+                "or go to sleep, or to add physical expression to a response."
+            ),
+        )
+    finally:
+        await client.aclose()
 
 
 class LookAtConfig(FunctionBaseConfig, name="robot_look_at"):
@@ -78,16 +82,17 @@ async def robot_look_at_fn(config: LookAtConfig, builder: Builder):
     import httpx
 
     base_url = config.base_url.rstrip("/")
+    # one client for the workflow's lifetime — per-call clients redo TCP setup
+    client = httpx.AsyncClient(timeout=10.0)
 
     async def _look(direction: str) -> str:
         direction = direction.strip().strip("'\"").lower()
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    f"{base_url}/robot/look_at", json={"direction": direction}
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await client.post(
+                f"{base_url}/robot/look_at", json={"direction": direction}
+            )
+            response.raise_for_status()
+            data = response.json()
         except Exception as e:
             logger.error(f"look_at tool failed: {e}")
             return f"Could not reach the robot ({e})."
@@ -96,11 +101,14 @@ async def robot_look_at_fn(config: LookAtConfig, builder: Builder):
             return f"Robot is now looking {direction}."
         return f"Invalid direction '{direction}'. Valid: left, right, up, down, front."
 
-    yield FunctionInfo.from_fn(
-        _look,
-        description=(
-            "Turn the robot's head to look in a direction. Input is exactly one of: "
-            "left, right, up, down, front. Use when the user asks the robot to look "
-            "somewhere or turn its head."
-        ),
-    )
+    try:
+        yield FunctionInfo.from_fn(
+            _look,
+            description=(
+                "Turn the robot's head to look in a direction. Input is exactly one of: "
+                "left, right, up, down, front. Use when the user asks the robot to look "
+                "somewhere or turn its head."
+            ),
+        )
+    finally:
+        await client.aclose()

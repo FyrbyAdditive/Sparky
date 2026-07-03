@@ -31,16 +31,17 @@ async def wiki_search_offline_fn(config: WikiSearchOfflineConfig, builder: Build
     import httpx
 
     base_url = config.base_url.rstrip("/")
+    # one client for the workflow's lifetime — per-call clients redo TCP setup
+    client = httpx.AsyncClient(timeout=30.0)
 
     async def _search(query: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(
-                    f"{base_url}/search",
-                    params={"q": query, "n": config.max_results},
-                )
-                response.raise_for_status()
-                data = response.json()
+            response = await client.get(
+                f"{base_url}/search",
+                params={"q": query, "n": config.max_results},
+            )
+            response.raise_for_status()
+            data = response.json()
         except Exception as e:
             logger.error(f"Offline wiki search failed: {e}")
             return f"Wikipedia search is currently unavailable ({e})."
@@ -51,10 +52,13 @@ async def wiki_search_offline_fn(config: WikiSearchOfflineConfig, builder: Build
 
         return "\n\n".join(f"{r['id']}: {r['text']}" for r in results)
 
-    yield FunctionInfo.from_fn(
-        _search,
-        description=(
-            "Search a local offline copy of Wikipedia for factual information "
-            "about people, places, events, and concepts. Input is a search query string."
-        ),
-    )
+    try:
+        yield FunctionInfo.from_fn(
+            _search,
+            description=(
+                "Search a local offline copy of Wikipedia for factual information "
+                "about people, places, events, and concepts. Input is a search query string."
+            ),
+        )
+    finally:
+        await client.aclose()

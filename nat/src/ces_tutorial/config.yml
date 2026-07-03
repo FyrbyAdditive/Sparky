@@ -1,6 +1,12 @@
 general:
   front_end:
     _type: fastapi
+    # The voice client only consumes the chat chunks; without this, every
+    # agent turn also serializes+streams full workflow introspection payloads
+    # (prompt echoes, tool I/O) as intermediate_data: SSE events it discards.
+    # (quoted "off" — bare off is YAML boolean false)
+    step_adaptor:
+      mode: "off"
 
 
 functions:
@@ -36,6 +42,9 @@ functions:
       verbose: true
       parse_agent_response_max_retries: 3
       tool_names: [wikipedia_search, play_animation, look_at]
+      # Images are redacted on this route (a separate vision route sees them);
+      # without this the model tells users it has no camera.
+      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body.
 
 # All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
 # model names come from the environment so model profiles can swap them

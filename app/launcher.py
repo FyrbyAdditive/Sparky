@@ -36,6 +36,17 @@ children: list[tuple[str, subprocess.Popen]] = []
 paused_spark_bot = {"host": None, "user": None}
 
 
+def ask(prompt: str, default_yes: bool = True) -> bool:
+    """Prompt a human; take the default when stdin isn't interactive."""
+    if not sys.stdin.isatty():
+        say(f"{prompt} -> auto '{'Y' if default_yes else 'N'}' (non-interactive)")
+        return default_yes
+    ans = input(prompt).strip().lower()
+    if not ans:
+        return default_yes
+    return ans in ("y", "yes")
+
+
 def say(msg):
     print(f"\033[1;36m[sparky]\033[0m {msg}")
 
@@ -104,6 +115,7 @@ def robot_present() -> bool:
              "print(any('reachy' in str(pa.get_device_info_by_index(i).get('name','')).lower() "
              "for i in range(pa.get_device_count())))"],
             capture_output=True, text=True, timeout=60, cwd=REPO / "bot",
+            stdin=subprocess.DEVNULL,
         )
         return "True" in result.stdout
     except Exception:
@@ -116,7 +128,7 @@ def spark_handoff(ssh_target: str):
         r = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ssh_target,
              "systemctl --user is-active sparky-bot"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
         )
         if r.stdout.strip() != "active":
             return
@@ -124,10 +136,10 @@ def spark_handoff(ssh_target: str):
         say(f"Couldn't check {ssh_target} over SSH — if the Spark bot is running, stop it manually.")
         return
 
-    ans = input(f"  The Spark's bot is running on {ssh_target}. Pause it while you use the robot here? [Y/n]: ")
-    if ans.strip().lower() in ("", "y", "yes"):
+    if ask(f"  The Spark's bot is running on {ssh_target}. Pause it while you use the robot here? [Y/n]: "):
         subprocess.run(["ssh", "-o", "BatchMode=yes", ssh_target,
-                        "systemctl --user stop sparky-bot reachy-daemon"], timeout=20)
+                        "systemctl --user stop sparky-bot reachy-daemon"],
+                       timeout=20, stdin=subprocess.DEVNULL)
         user, host = ssh_target.split("@")
         paused_spark_bot.update(host=host, user=user)
         say(f"Paused the bot on {host} — it will be restored when you quit.")
@@ -148,7 +160,8 @@ def start_child(name, cmd, cwd, health_url, timeout=180, extra_env=None) -> subp
     child_env = dict(os.environ)
     if extra_env:
         child_env.update(extra_env)
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=child_env)
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
+                            env=child_env, stdin=subprocess.DEVNULL)
     children.append((name, proc))
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -203,7 +216,7 @@ def main():
         say("⚠ No Reachy Mini detected on this machine (USB).")
         say("  Sound only goes in and out of the robot - without it there is no voice.")
         say("  Plug the robot in and relaunch (or continue for panel-only testing).")
-        if input("  Continue anyway? [y/N]: ").strip().lower() != "y":
+        if not ask("  Continue anyway? [y/N]: ", default_yes=False):
             sys.exit(1)
 
     if env.get("SPARK_SSH"):

@@ -71,6 +71,66 @@ _health_cache: dict = {"ts": 0.0, "results": {}}
 _http_client: httpx.AsyncClient | None = None
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+ANIMATIONS_DIR = Path(os.getenv("ANIMATIONS_DIR",
+                                Path(__file__).resolve().parent.parent / "animations"))
+
+# Animation soundtrack playback: the authored clips ship with audio that was
+# never played. "sfx" (default) plays only the <name>_sfx.wav sound effects
+# (camera shutter, wake chime, beep); "full" also plays the <name>.wav
+# voice/soundtrack files; "off" disables.
+ANIMATION_AUDIO = os.getenv("ANIMATION_AUDIO", "sfx").strip().lower()
+_OUT_RATE = 24000
+
+
+def _load_wav_pcm24k(path: Path) -> bytes | None:
+    """Load a wav as 24kHz mono s16 PCM (numpy linear resample)."""
+    import wave
+
+    import numpy as np
+
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            raw = w.readframes(w.getnframes())
+        if width != 2:
+            return None
+        samples = np.frombuffer(raw, dtype=np.int16)
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
+        if rate != _OUT_RATE:
+            n_out = int(len(samples) * _OUT_RATE / rate)
+            x_old = np.linspace(0.0, 1.0, len(samples), endpoint=False)
+            x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
+            samples = np.interp(x_new, x_old, samples.astype(np.float32)).astype(np.int16)
+        return samples.tobytes()
+    except Exception as e:
+        logger.warning(f"animation audio: could not load {path.name}: {e}")
+        return None
+
+
+def _animation_audio_frames(name: str) -> list:
+    """OutputAudioRawFrames for an animation's audio, per ANIMATION_AUDIO mode.
+    Played through the normal output path, so the software gain applies and
+    the bot-speaking gate keeps the mic from hearing the robot's own sfx."""
+    from pipecat.frames.frames import OutputAudioRawFrame
+
+    if ANIMATION_AUDIO == "off":
+        return []
+    candidates = [ANIMATIONS_DIR / name / f"{name}_sfx.wav"]
+    if ANIMATION_AUDIO == "full":
+        candidates.append(ANIMATIONS_DIR / name / f"{name}.wav")
+    frames = []
+    chunk = _OUT_RATE * 2 // 2  # 500ms of s16 mono
+    for path in candidates:
+        if not path.exists():
+            continue
+        pcm = _load_wav_pcm24k(path)
+        if not pcm:
+            continue
+        for i in range(0, len(pcm), chunk):
+            frames.append(OutputAudioRawFrame(
+                audio=pcm[i:i + chunk], sample_rate=_OUT_RATE, num_channels=1))
+    return frames
 
 
 def attach_session(loop, task, messages, mic_gate):
@@ -384,6 +444,10 @@ def _build_app() -> FastAPI:
         if not service.connected:
             return {"ok": False, "error": "robot_not_connected"}
         ok = service.play_animation(req.name)
+        if ok:
+            audio_frames = _animation_audio_frames(req.name)
+            if audio_frames:
+                _queue_frames(audio_frames)
         return {"ok": ok, "error": None if ok else "robot_error"}
 
     @app.post("/robot/look_at")
@@ -399,6 +463,11 @@ def _build_app() -> FastAPI:
     def estop():
         """Emergency stop: halt motion, release torque, mute the mic."""
         results = {}
+        # audible acknowledgment (output path keeps running; only the mic
+        # and motors stop)
+        beep = _animation_audio_frames("beep")
+        if beep:
+            _queue_frames(beep)
         try:
             gate = _session["mic_gate"]
             if gate:

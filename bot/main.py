@@ -95,8 +95,9 @@ PERSONA = (
     "Do not claim to recognize voices beyond these labels. Everything you say "
     "is spoken aloud exactly as written: never write stage directions, action "
     "descriptions or asterisks like nodding or waving — your body only moves "
-    "through your movement tools. If you cannot perform a requested action in "
-    "the current context, just answer normally without mentioning the action."
+    "through your movement tools. You genuinely can move (nod, look around, "
+    "wiggle your antennas, dance): never tell anyone you are unable to move "
+    "or that you lack a body."
 )
 
 
@@ -205,6 +206,10 @@ async def run_bot():
             speaker_diarization=os.getenv("SPEAKER_DIARIZATION", "1").strip() != "0",
             diarization_max_speakers=int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4")),
             word_time_offsets=True,  # tags ride on words[]; keep it populated
+            # domain words the ASR kept mishearing ("nod" -> "not"); boosting
+            # biases the decoder toward them without other quality impact
+            boosted_lm_words=[w for w in os.getenv(
+                "RIVA_BOOSTED_WORDS", "nod,Sparky,antennas,wiggle").split(",") if w],
         ),
     )
 

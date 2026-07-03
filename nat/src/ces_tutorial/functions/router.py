@@ -1,5 +1,6 @@
 import ast
 import logging
+import re
 
 from pydantic import Field
 
@@ -15,6 +16,18 @@ import json
 
 
 logger = logging.getLogger(__name__)
+
+# Deterministic pre-route: physical-action requests MUST reach the
+# tool-capable agent, and the small routing LLM repeatedly misfiled them as
+# chit_chat (the robot then narrated or denied the movement). Matching here
+# also skips the router-LLM round-trip entirely for these turns.
+_ACTION_RE = re.compile(
+    r"\b(nod|nods|nodding|dance|dancing|wiggle|antennas?|"
+    r"look\s+(?:left|right|up|down|around)|"
+    r"(?:shake|turn|move)\s+your\s+head|your\s+head|"
+    r"wake\s+up|go\s+to\s+sleep|take\s+a\s+(?:picture|photo))\b",
+    re.IGNORECASE,
+)
 
 # Prompt for the router
 TASK_INSTRUCTION = """
@@ -214,7 +227,21 @@ async def router_fn(config: RouterConfig, builder: Builder):
             messages_dict = []
             logger.warning("No messages received in chat request")
 
-        user_intent = await get_route_from_conversation(messages_dict)
+        # Deterministic action routing before the LLM gets a say
+        last_text = ""
+        if messages_dict:
+            content = messages_dict[0].get("content")
+            if isinstance(content, str):
+                last_text = content
+            elif isinstance(content, list):
+                last_text = " ".join(
+                    p.get("text", "") for p in content
+                    if isinstance(p, dict) and p.get("type") == "text")
+        if _ACTION_RE.search(last_text):
+            logger.info("Router: action keyword — deterministic route 'other'")
+            user_intent = "other"
+        else:
+            user_intent = await get_route_from_conversation(messages_dict)
 
 
         logger.debug(f"User intent: {user_intent}")

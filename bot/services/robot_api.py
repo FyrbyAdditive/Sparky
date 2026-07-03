@@ -287,6 +287,9 @@ def _build_app() -> FastAPI:
             if AUDIO_STATS["mic_last_frame_ts"] > 0:  # instrumented transport active
                 audio = dict(AUDIO_STATS)
                 audio["mic_frame_age_secs"] = round(_time.time() - audio.pop("mic_last_frame_ts"), 1)
+                hb_ts = audio.pop("mic_helper_last_hb_ts", 0.0)
+                audio["mic_helper_hb_age_secs"] = (
+                    round(_time.time() - hb_ts, 1) if hb_ts > 0 else None)
                 # gate visibility: a robot that hears nothing while 'unmuted'
                 # was undiagnosable without this
                 audio["speech_gated"] = bool(GATE["bot_speaking"])

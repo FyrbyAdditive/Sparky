@@ -29,7 +29,7 @@ from pipecat.transports.local.audio import (
 
 REOPEN_COOLDOWN_SECS = 2.0
 MIC_STALL_SECS = 8.0
-MIC_CHECK_INTERVAL_SECS = 5.0
+MIC_CHECK_INTERVAL_SECS = 2.0  # heartbeat-based death detection needs tighter checks
 
 # Read by the control panel's /status
 AUDIO_STATS = {
@@ -37,10 +37,16 @@ AUDIO_STATS = {
     "mic_reopens": 0,
     "out_reopens": 0,
     "out_write_errors": 0,
-    # capture-continuity telemetry: holes here mean words lost before ASR
-    "mic_overflows": 0,       # PortAudio reported input overflow/underflow
-    "mic_gap_events": 0,      # >150ms between 100ms callbacks
+    # capture-continuity telemetry. NB in capture-process mode the gap
+    # numbers measure bot-side pipe-read jitter (lossless — the pipe
+    # buffers); REAL capture loss is the helper-side overflow counter.
+    "mic_overflows": 0,       # in-process fallback path only
+    "mic_gap_events": 0,      # >150ms between 100ms reads (jitter, not loss)
     "mic_max_gap_ms": 0,
+    "mic_helper_chunks": 0,       # helper heartbeat: chunks captured
+    "mic_helper_overflows": 0,    # helper heartbeat: REAL lost buffers
+    "mic_helper_hb_age_secs": 0,  # computed by /status readers
+    "mic_helper_last_hb_ts": 0.0,
 }
 
 # Shared gate state, written by MicGateProcessor. The capture callback zeroes
@@ -137,16 +143,22 @@ class ResilientAudioInput(LocalAudioInputTransport):
         self._capture_proc = subprocess.Popen(
             [sys.executable, "-u", str(helper), device_name, str(self._sample_rate),
              str(self._params.audio_in_channels)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
         )
         self._reader_generation += 1
+        AUDIO_STATS["mic_helper_last_hb_ts"] = time.time()  # grace period
         self._reader_thread = threading.Thread(
             target=self._reader_loop,
             args=(self._capture_proc, self._reader_generation),
             daemon=True, name="mic-capture-reader",
         )
         self._reader_thread.start()
+        threading.Thread(
+            target=self._stderr_loop,
+            args=(self._capture_proc, self._reader_generation),
+            daemon=True, name="mic-capture-heartbeat",
+        ).start()
         logger.info(f"ResilientAudioInput: capture process started (pid {self._capture_proc.pid}, "
                     f"device '{device_name}', {self._sample_rate}Hz)")
 
@@ -181,9 +193,44 @@ class ResilientAudioInput(LocalAudioInputTransport):
         if generation == self._reader_generation:
             logger.warning("ResilientAudioInput: capture reader ended")
 
+    def _stderr_loop(self, proc: subprocess.Popen, generation: int):
+        """Parse helper heartbeats into AUDIO_STATS (real-loss telemetry)."""
+        stderr = proc.stderr
+        while generation == self._reader_generation:
+            try:
+                line = stderr.readline()
+            except Exception:
+                break
+            if not line:
+                break
+            try:
+                parts = line.decode(errors="replace").split()
+                if parts and parts[0] == "hb" and len(parts) >= 3:
+                    AUDIO_STATS["mic_helper_last_hb_ts"] = time.time()
+                    AUDIO_STATS["mic_helper_chunks"] = int(parts[1])
+                    AUDIO_STATS["mic_helper_overflows"] = int(parts[2])
+                else:
+                    logger.warning(f"capture helper: {line.decode(errors='replace').rstrip()}")
+            except Exception:
+                pass
+
     async def _watchdog(self):
         while True:
             await asyncio.sleep(MIC_CHECK_INTERVAL_SECS)
+            # heartbeat check first: detects helper death in seconds rather
+            # than waiting out the frame-stall threshold
+            if self._use_capture_process and self._capture_proc is not None:
+                hb_age = time.time() - AUDIO_STATS["mic_helper_last_hb_ts"]
+                if hb_age > 3.5:
+                    logger.error(f"ResilientAudioInput: capture helper heartbeat lost "
+                                 f"({hb_age:.0f}s), respawning")
+                    AUDIO_STATS["mic_reopens"] += 1
+                    try:
+                        await asyncio.get_running_loop().run_in_executor(None, self._reopen)
+                        AUDIO_STATS["mic_last_frame_ts"] = time.time()
+                    except Exception as e:
+                        logger.error(f"ResilientAudioInput: helper respawn failed: {e}")
+                    continue
             age = time.time() - AUDIO_STATS["mic_last_frame_ts"]
             if age > MIC_STALL_SECS:
                 logger.error(f"ResilientAudioInput: mic stalled ({age:.0f}s without frames), reopening stream")

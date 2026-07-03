@@ -164,6 +164,78 @@ def _resolve_audio_devices():
         _time.sleep(3)
 
 
+class LivenessSTT(NvidiaSTTService):
+    """Recover an ASR stream that is open but yields nothing.
+
+    Observed wedge: the ASR server restarts, a reconnect completes while its
+    models are still loading, the gRPC stream stays open but never returns
+    results — no error, so pipecat's drop-handler never fires and the robot
+    is deaf until process restart. Silence alone is normal (the server VAD
+    yields nothing for quiet audio), so liveness is judged against LOCAL
+    speech: if our transport VAD heard the user start speaking and no
+    response of any kind arrives, the stream is dead — force a reconnect.
+    """
+
+    LIVENESS_SECS = 4.0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._liveness_task = None
+        self._last_user_speech_at = 0.0
+        self._last_response_at = 0.0
+        self._liveness_strikes = 0
+
+    async def start(self, frame):
+        await super().start(frame)
+        import time as _t
+        self._last_response_at = _t.time()  # grace after (re)start
+        if self._liveness_task is None:
+            self._liveness_task = self.create_task(self._liveness_watchdog())
+
+    async def cleanup(self):
+        if self._liveness_task is not None:
+            await self.cancel_task(self._liveness_task)
+            self._liveness_task = None
+        await super().cleanup()
+
+    async def process_frame(self, frame, direction):
+        from pipecat.frames.frames import UserStartedSpeakingFrame
+        if isinstance(frame, UserStartedSpeakingFrame):
+            import time as _t
+            self._last_user_speech_at = _t.time()
+        await super().process_frame(frame, direction)
+
+    async def _handle_response(self, response):
+        import time as _t
+        self._last_response_at = _t.time()
+        self._liveness_strikes = 0
+        await super()._handle_response(response)
+
+    async def _liveness_watchdog(self):
+        import time as _t
+        while True:
+            await asyncio.sleep(1.0)
+            speech = self._last_user_speech_at
+            if speech <= 0 or self._last_response_at >= speech:
+                self._liveness_strikes = 0
+                continue
+            if (_t.time() - speech) < self.LIVENESS_SECS:
+                continue
+            if getattr(self, "_reconnecting", False):
+                continue
+            self._liveness_strikes += 1
+            if self._liveness_strikes < 2:
+                continue
+            self._liveness_strikes = 0
+            self._last_user_speech_at = 0.0
+            logger.warning("LivenessSTT: user spoke but the ASR stream returned "
+                           "nothing — forcing a reconnect")
+            try:
+                await self._request_reconnect()
+            except Exception as e:
+                logger.error(f"LivenessSTT: forced reconnect failed: {e}")
+
+
 async def run_bot():
     logger.info("Starting Sparky (robot-native audio)")
 
@@ -186,7 +258,7 @@ async def run_bot():
     )
 
     # Streaming ASR from the local Nemotron ASR NIM (Riva protocol).
-    stt = NvidiaSTTService(
+    stt = LivenessSTT(
         server=os.getenv("RIVA_SERVER", "localhost:50051"),
         use_ssl=False,
         model_function_map={"function_id": "", "model_name": os.getenv("RIVA_MODEL", "")},

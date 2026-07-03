@@ -48,13 +48,33 @@ def main() -> int:
         frames_per_buffer=frames,
     )
     out = sys.stdout.buffer
+    import time
+
+    chunks = 0
+    overflows = 0
+    last_hb = time.monotonic()
     try:
         while True:
-            data = stream.read(frames, exception_on_overflow=False)
+            try:
+                # overflow must raise so real capture loss is COUNTED —
+                # this is the only place loss can actually happen
+                data = stream.read(frames, exception_on_overflow=True)
+            except OSError:
+                overflows += 1
+                continue
             out.write(data)
             out.flush()
-    except (BrokenPipeError, OSError):
-        return 0  # parent went away or device vanished
+            chunks += 1
+            now = time.monotonic()
+            if now - last_hb >= 1.0:
+                # heartbeat on stderr: parsed by the parent into AUDIO_STATS,
+                # and its absence detects helper death within seconds
+                print(f"hb {chunks} {overflows}", file=sys.stderr, flush=True)
+                last_hb = now
+    except BrokenPipeError:
+        return 0  # parent went away
+    except OSError:
+        return 1  # device vanished; parent respawns
     finally:
         try:
             stream.stop_stream()

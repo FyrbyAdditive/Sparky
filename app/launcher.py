@@ -108,10 +108,17 @@ def read_env() -> dict:
 
 
 def robot_present() -> bool:
+    # The synced venv's python answers in well under a second; a cold
+    # `uv run` first resolves the whole environment (seconds at launch).
+    venv_python = REPO / "bot" / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        probe_cmd = [str(venv_python), "-c"]
+    else:
+        probe_cmd = [UV, "run", "--project", str(REPO / "bot"), "python", "-c"]
     try:
         result = subprocess.run(
-            [UV, "run", "--project", str(REPO / "bot"), "python", "-c",
-             "import pyaudio; pa = pyaudio.PyAudio(); "
+            probe_cmd +
+            ["import pyaudio; pa = pyaudio.PyAudio(); "
              "print(any('reachy' in str(pa.get_device_info_by_index(i).get('name','')).lower() "
              "for i in range(pa.get_device_count())))"],
             capture_output=True, text=True, timeout=60, cwd=REPO / "bot",
@@ -160,8 +167,12 @@ def start_child(name, cmd, cwd, health_url, timeout=180, extra_env=None) -> subp
     child_env = dict(os.environ)
     if extra_env:
         child_env.update(extra_env)
+    # New session per child: the real daemon/nat/bot are *grandchildren*
+    # under the uv wrapper, so teardown must signal the whole process group
+    # or they survive the launcher (two-instance hazard).
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
-                            env=child_env, stdin=subprocess.DEVNULL)
+                            env=child_env, stdin=subprocess.DEVNULL,
+                            start_new_session=True)
     children.append((name, proc))
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -174,15 +185,24 @@ def start_child(name, cmd, cwd, health_url, timeout=180, extra_env=None) -> subp
     raise RuntimeError(f"{name} did not become ready — see {CONFIG_DIR}/{name}.log")
 
 
+def _signal_group(proc: subprocess.Popen, sig: signal.Signals):
+    """Signal the child's whole process group (uv wrapper + grandchildren)."""
+    try:
+        os.killpg(proc.pid, sig)  # start_new_session makes pgid == child pid
+    except (ProcessLookupError, PermissionError):
+        if proc.poll() is None:
+            proc.send_signal(sig)
+
+
 def stop_children():
     for name, proc in reversed(children):
         if proc.poll() is None:
             say(f"Stopping {name}...")
-            proc.terminate()
+            _signal_group(proc, signal.SIGTERM)
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_group(proc, signal.SIGKILL)
     children.clear()
 
 
@@ -223,7 +243,14 @@ def main():
         spark_handoff(env["SPARK_SSH"])
     atexit.register(restore_spark_bot)
     atexit.register(stop_children)
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    def _on_sigterm(*_):
+        # SystemExit unwinds the main loop and runs the atexit teardown
+        # (stop_children then restore_spark_bot) deterministically.
+        say("SIGTERM — shutting down...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
 
     env_file = str(ENV_FILE)
     # --deactivate-audio: the BOT owns the robot's mic/speaker exclusively;

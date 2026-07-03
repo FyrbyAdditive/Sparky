@@ -177,7 +177,6 @@ class ReachyService:
     def feed_audio(self, audio_chunk_base64):
         """Feeds audio from TTS to the wobble engine."""
         if self.wobbler:
-            logger.info("Feeding audio to Reachy")
             self.wobbler.feed(audio_chunk_base64)
 
     def set_listening_pose(self):

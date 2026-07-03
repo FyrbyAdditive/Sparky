@@ -2,6 +2,10 @@
 Description=Sparky NAT agent server
 After=network.target
 
+# a hard-crashing service must not restart forever into live robot hardware
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 WorkingDirectory=%h/Sparky/nat
 ExecStart=%h/.local/bin/uv run --env-file %h/Sparky/.env nat serve --config_file src/ces_tutorial/config.yml --port 8001

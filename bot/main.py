@@ -42,6 +42,14 @@ from services.transcript_tap import TranscriptTap
 
 load_dotenv(override=True)
 
+# Loguru's default sink is stderr at DEBUG, so pipecat's frame-level DEBUG
+# detail floods the console on the realtime audio path. Default to INFO;
+# BOT_LOG_LEVEL=DEBUG restores full diagnostics.
+import sys as _sys
+
+logger.remove()
+logger.add(_sys.stderr, level=os.getenv("BOT_LOG_LEVEL", "INFO").upper())
+
 
 def _acquire_single_instance_lock():
     """Refuse to run two bots: duplicate instances fight over the robot

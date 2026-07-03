@@ -41,7 +41,7 @@ class NATVisionLLMService(NvidiaLLMService):
 
     def __init__(self, *args, user_id: Optional[str] = None, max_image_dimension: int = 256, image_quality: int = 40, **kwargs):
         super().__init__(*args, **kwargs)
-        logger.info("NATVisionLLMService: Initialized with max_dimension=%d, quality=%d (streaming disabled for NAT)", max_image_dimension, image_quality)
+        logger.info(f"NATVisionLLMService: Initialized with max_dimension={max_image_dimension}, quality={image_quality} (streaming disabled for NAT)")
         self._user_id = user_id
         self._pending_image_future: Optional[asyncio.Future] = None
         self._last_image: Optional[UserImageRawFrame] = None
@@ -164,16 +164,14 @@ class NATVisionLLMService(NvidiaLLMService):
                         "type": "image_url",
                         "image_url": {"url": image_data_url, "detail": "auto"}
                     })
-                    logger.info("Appended image to existing multimodal user message")
+                    logger.debug("Appended image to existing multimodal user message")
                 else:
                     # Convert string to multimodal format
                     messages[i]["content"] = [
                         {"type": "text", "text": current_content or user_message},
                         {"type": "image_url", "image_url": {"url": image_data_url, "detail": "auto"}}
                     ]
-                    logger.info("Converted user message to multimodal format with image")
-                
-                logger.info("Image successfully added to context!")
+                    logger.debug("Converted user message to multimodal format with image")
                 return
 
         logger.warning("No user message found in context to add image to")
@@ -182,9 +180,10 @@ class NATVisionLLMService(NvidiaLLMService):
         """
         Intercept frames to handle automatic image fetching.
         """
-        # Only log significant frames to reduce noise (exclude audio, image, and speaking frames)
+        # Frame-level tracing only at TRACE: this fires dozens of times per
+        # turn even after excluding audio/image/speaking frames
         if not isinstance(frame, (InputAudioRawFrame, UserImageRawFrame, UserSpeakingFrame, BotSpeakingFrame)):
-            logger.info(f"NATVisionLLMService.process_frame called with {type(frame).__name__}, direction={direction}")
+            logger.trace(f"NATVisionLLMService.process_frame called with {type(frame).__name__}, direction={direction}")
         
         # Reset turn state on interruption (new user input)
         if isinstance(frame, InterruptionFrame):
@@ -196,7 +195,7 @@ class NATVisionLLMService(NvidiaLLMService):
             
             # If we're waiting for an image, resolve the future
             if self._pending_image_future and not self._pending_image_future.done():
-                logger.info("NATVisionLLMService: Image captured for pending request")
+                logger.debug("NATVisionLLMService: Image captured for pending request")
                 self._pending_image_future.set_result(frame)
             
             # Don't pass the raw image frame downstream
@@ -214,14 +213,14 @@ class NATVisionLLMService(NvidiaLLMService):
                 return
             
             if not self._current_turn_has_image:
-                logger.info("NATVisionLLMService: Intercepting LLMMessagesFrame to add image")
-                
+                logger.debug("NATVisionLLMService: Intercepting LLMMessagesFrame to add image")
+
                 # Fetch the image first
                 await self._fetch_and_wait_for_image(frame)
-                
+
                 # Now add it to this frame's context
                 if self._last_image:
-                    logger.info("NATVisionLLMService: Encoding and adding image to context")
+                    logger.debug("NATVisionLLMService: Encoding and adding image to context")
                     image_data_url = self._encode_image_to_base64(self._last_image)
                     
                     if image_data_url:
@@ -238,23 +237,16 @@ class NATVisionLLMService(NvidiaLLMService):
                         
                         self._add_image_to_context(context, image_data_url, user_message)
                         self._current_turn_has_image = True
-                        
-                        # Log what we're sending to NAT
-                        logger.info(f"NATVisionLLMService: Frame has {len(messages)} messages after adding image")
+                        logger.info("NATVisionLLMService: image attached to this turn")
+
+                        # Per-message context dump only when debugging
                         for i, msg in enumerate(messages):
                             role = msg.get("role", "unknown")
                             content = msg.get("content", "")
                             if isinstance(content, list):
-                                logger.info(f"  Message {i} ({role}): multimodal with {len(content)} items")
-                                for j, item in enumerate(content):
-                                    item_type = item.get("type", "unknown")
-                                    if item_type == "image_url":
-                                        url = item.get("image_url", {}).get("url", "")
-                                        logger.info(f"    Item {j}: {item_type}, URL length: {len(url)}")
-                                    else:
-                                        logger.info(f"    Item {j}: {item_type}")
+                                logger.debug(f"  Message {i} ({role}): multimodal with {len(content)} items")
                             else:
-                                logger.info(f"  Message {i} ({role}): text only, length {len(content) if content else 0}")
+                                logger.debug(f"  Message {i} ({role}): text only, length {len(content) if content else 0}")
                 else:
                     logger.warning("NATVisionLLMService: No image received, sending frame without image")
             else:

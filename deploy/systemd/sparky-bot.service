@@ -3,6 +3,10 @@ Description=Sparky voice bot (pipecat)
 After=network.target reachy-daemon.service
 Wants=reachy-daemon.service
 
+# a hard-crashing service must not restart forever into live robot hardware
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 WorkingDirectory=%h/Sparky/bot
 ExecStart=%h/.local/bin/uv run --env-file %h/Sparky/.env python main.py

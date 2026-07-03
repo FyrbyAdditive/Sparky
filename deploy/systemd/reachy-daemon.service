@@ -2,6 +2,10 @@
 Description=Reachy Mini robot daemon (hardware)
 After=network.target
 
+# a hard-crashing service must not restart forever into live robot hardware
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 WorkingDirectory=%h/Sparky/bot
 ExecStart=%h/.local/bin/uv run -m reachy_mini.daemon.app.main --no-localhost-only --deactivate-audio

@@ -38,6 +38,14 @@ _api_loop: asyncio.AbstractEventLoop | None = None
 _history: collections.deque = collections.deque(maxlen=200)
 _ws_queues: set = set()
 
+# /status support (all touched only from the API server's event loop):
+# short-TTL health cache so several open panels don't multiply probes into
+# the live inference engines, plus one long-lived client for keep-alive.
+_HEALTH_TTL_SECS = 5.0
+_health_cache: dict = {"ts": 0.0, "results": {}}
+_http_client: httpx.AsyncClient | None = None
+_sink_name: str | None = None  # pactl sink discovery is stable per session
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -57,7 +65,15 @@ def push_transcript(item: dict):
 def _broadcast(item: dict):
     _history.append(item)
     for q in list(_ws_queues):
-        q.put_nowait(item)
+        try:
+            q.put_nowait(item)
+        except asyncio.QueueFull:
+            # wedged panel client: drop its oldest item rather than leak
+            try:
+                q.get_nowait()
+                q.put_nowait(item)
+            except asyncio.QueueEmpty:
+                pass
 
 
 def _queue_frames(frames) -> bool:
@@ -79,13 +95,17 @@ class VolumeRequest(BaseModel):
 def _reachy_sink() -> str | None:
     import subprocess
 
+    global _sink_name
+    if _sink_name is not None:
+        return _sink_name
     try:
         out = subprocess.run(["pactl", "list", "short", "sinks"],
                              capture_output=True, text=True, timeout=5).stdout
         for line in out.splitlines():
             parts = line.split("\t")
             if len(parts) > 1 and "reachy" in parts[1].lower():
-                return parts[1]
+                _sink_name = parts[1]
+                return _sink_name
     except Exception as e:
         logger.warning(f"sink discovery failed: {e}")
     return None
@@ -195,23 +215,33 @@ def _build_app() -> FastAPI:
                 targets["wiki"] = f"{wiki.rstrip('/')}/health"
             return targets
 
-        # de-duplicate identical URLs (unified profile points several roles at one engine)
-        targets = health_targets()
-        unique = {}
-        for name, url in targets.items():
-            unique.setdefault(url, []).append(name)
+        import time as _t
 
-        results = {}
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        global _http_client
+        if _http_client is None:
+            _http_client = httpx.AsyncClient(timeout=3.0)
+
+        if _t.monotonic() - _health_cache["ts"] < _HEALTH_TTL_SECS:
+            results = _health_cache["results"]
+        else:
+            # de-duplicate identical URLs (unified profile points several roles at one engine)
+            targets = health_targets()
+            unique = {}
+            for name, url in targets.items():
+                unique.setdefault(url, []).append(name)
+
+            results = {}
+
             async def check(url, names):
                 try:
-                    r = await client.get(url)
+                    r = await _http_client.get(url)
                     ok = r.status_code == 200
                 except Exception:
                     ok = False
                 for n in names:
                     results[n] = ok
             await asyncio.gather(*(check(u, ns) for u, ns in unique.items()))
+            _health_cache.update(ts=_t.monotonic(), results=results)
 
         gate = _session["mic_gate"]
         try:
@@ -240,7 +270,7 @@ def _build_app() -> FastAPI:
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
         await websocket.accept()
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=200)
         _ws_queues.add(q)
         try:
             await websocket.send_json({"type": "history", "items": list(_history)})

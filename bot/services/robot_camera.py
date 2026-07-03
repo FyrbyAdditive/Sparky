@@ -78,6 +78,13 @@ class RobotCameraResponder(FrameProcessor):
             self._capture.release()
             self._capture = None
             return None
+        # Drivers (AVFoundation especially) often ignore the requested mode
+        # and deliver native frames; downscale BEFORE the expensive
+        # convert+copy so the requested resolution is honored regardless.
+        wanted = _parse_resolution(CAMERA["resolution"])
+        h, w = frame_bgr.shape[:2]
+        if wanted and (w, h) != wanted and w > wanted[0]:
+            frame_bgr = cv2.resize(frame_bgr, wanted, interpolation=cv2.INTER_AREA)
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         h, w = frame_rgb.shape[:2]
         return frame_rgb.tobytes(), (w, h)

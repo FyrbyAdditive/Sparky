@@ -1,6 +1,6 @@
 # Sparky consolidated stack — one compose for every host, role-selected
 # via COMPOSE_PROFILES (see ../profiles/*.env):
-#   audio  = init-volumes, riva-stt, kokoro-tts, tls-proxy   (the robot/bot host)
+#   audio  = init-volumes, nemotron-asr, kokoro-tts, tls-proxy   (the robot/bot host)
 #   llm    = vllm-agent, vllm-router                          (inference host)
 #   vision = vllm-vision                                      (parity profile only)
 #   wiki   = wiki-offline
@@ -118,36 +118,6 @@ services:
               count: all
               capabilities: [ gpu ]
 
-  riva-stt:
-    restart: unless-stopped
-    profiles: [ "audio" ]
-    container_name: riva-stt
-    image: nvcr.io/nim/nvidia/parakeet-1-1b-ctc-en-us:1.4.0
-    depends_on:
-      init-volumes:
-        condition: service_completed_successfully
-    environment:
-      - NIM_MODEL_PROFILE=e48ada80aead95c5fdcccc3b302d07d406d1d0b25858e4994f3cc34338002572
-      - NGC_API_KEY=${NGC_API_KEY:?NGC key needed once to pull/initialize the Riva NIM}
-      - NIM_HTTP_API_PORT=9000
-      - NIM_GRPC_API_PORT=50051
-    ports:
-      - "50051:50051"
-      - "9000:9000"
-    volumes:
-      - nim-cache:/opt/nim/.cache
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/v1/health/ready"]
-      start_period: 2h
-      start_interval: 5s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
-
   kokoro-tts:
     restart: unless-stopped
     profiles: [ "audio" ]
@@ -167,13 +137,10 @@ services:
               count: all
               capabilities: [ gpu ]
 
-  # Nemotron 3.5 streaming ASR (0.6b) — alternative STT for A/B against
-  # Parakeet. Not part of the "audio" profile; bring it up by name:
-  #   cd deploy/stack && docker compose --env-file envfile-merged up -d nemotron-asr
-  # Bot-side switch: RIVA_SERVER=<host>:50052 (Parakeet stays on :50051).
+  # Streaming ASR: Nemotron 3.5 (0.6b, cache-aware RNN-T) NIM.
   nemotron-asr:
     restart: unless-stopped
-    profiles: [ "audio-alt" ]
+    profiles: [ "audio" ]
     container_name: nemotron-asr
     image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.2.0
     depends_on:
@@ -184,8 +151,8 @@ services:
       - NIM_HTTP_API_PORT=9000
       - NIM_GRPC_API_PORT=50051
     ports:
-      - "50052:50051"
-      - "9001:9000"
+      - "50051:50051"
+      - "9000:9000"
     volumes:
       - nim-cache:/opt/nim/.cache
     healthcheck:

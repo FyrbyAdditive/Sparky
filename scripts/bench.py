@@ -184,7 +184,7 @@ def main():
         if tts:
             print(f"| tts | {tts['model']} | {tts['ttfa_s']*1000:.0f}ms | total {tts['total_s']:.2f}s |")
         if stt:
-            print(f"| stt | parakeet-1-1b-ctc | {stt['latency_s']*1000:.0f}ms | {stt['rtf_x']:.0f}x realtime |")
+            print(f"| stt | riva-asr | {stt['latency_s']*1000:.0f}ms | {stt['rtf_x']:.0f}x realtime |")
 
     return 0 if results else 1
 

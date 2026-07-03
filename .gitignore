@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# per-machine stack secrets (NGC key etc.)
+deploy/stack/.env
+deploy/stack/envfile-merged

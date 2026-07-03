@@ -169,7 +169,7 @@ async def run_bot():
         )
     )
 
-    # Streaming ASR from the local Riva/Parakeet NIM.
+    # Streaming ASR from the local Nemotron ASR NIM (Riva protocol).
     stt = NvidiaSTTService(
         server=os.getenv("RIVA_SERVER", "localhost:50051"),
         use_ssl=False,

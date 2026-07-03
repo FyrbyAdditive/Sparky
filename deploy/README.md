@@ -8,7 +8,7 @@ Everything the assistant consumes is an HTTP/gRPC endpoint, so the robot/bot hos
 - DGX Spark OS with Docker + NVIDIA Container Toolkit (stock DGX Spark image has both)
 - One-time online setup:
   - `NGC_API_KEY` — NGC personal key with *NGC Catalog* scope, used once to pull and
-    initialize the Riva Parakeet NIM (`nvcr.io/nim/...` requires `docker login nvcr.io`
+    initialize the Nemotron ASR NIM (`nvcr.io/nim/...` requires `docker login nvcr.io`
     with user `$oauthtoken` / password = the key)
   - `HF_TOKEN` — optional, speeds up / gates some Hugging Face model downloads
 - After models and containers are cached, the stack runs with no internet access.
@@ -16,14 +16,13 @@ Everything the assistant consumes is an HTTP/gRPC endpoint, so the robot/bot hos
 ## Bring-up
 
 Use the consolidated stack (`deploy/stack/`, compose project `sparky`) with a
-profile env from `deploy/profiles/` — the `spark-a`/`spark-b` directories are
-legacy and kept only for reference:
+profile env from `deploy/profiles/`:
 
 ```bash
 cd deploy/stack
-cp ../.env.example ../spark-a/.env   # secrets file; referenced below as envfile-merged
+cp ../.env.example .env              # per-machine secrets (gitignored)
 docker login nvcr.io                 # user: $oauthtoken, password: <NGC_API_KEY>
-cat ../spark-a/.env ../profiles/parity-1spark.env > envfile-merged
+cat .env ../profiles/parity-1spark.env > envfile-merged
 docker compose --env-file envfile-merged up -d --build
 watch docker compose ps              # wait for all services to report healthy
 ```
@@ -41,7 +40,7 @@ from the `hf-cache` / `nim-cache` volumes.
 | vllm-agent | Nemotron-3-Nano-30B-A3B-FP8 | ~51GB (0.40 fraction incl. KV) |
 | vllm-vision | Nemotron-Nano-12B-v2-VL-FP8 | ~26GB (0.20) |
 | vllm-router | Phi-3-mini-128k-instruct | ~17GB (0.14 — 0.08 starves the KV cache) |
-| riva-stt | Parakeet 1.1B CTC NIM | ~6GB |
+| nemotron-asr | Nemotron 3.5 ASR 0.6b NIM | ~6GB |
 | kokoro-tts | Kokoro-82M | ~2GB |
 | wiki-offline | txtai index (CPU) | ~10GB RAM |
 | **Total** | | **~105GB** — leaves headroom for OS |
@@ -74,10 +73,10 @@ curl http://$SPARK_A:8880/v1/audio/speech -H 'Content-Type: application/json' \
 
 1. **Sync the repo**: `rsync -az --exclude .venv --exclude __pycache__ Sparky/ user@spark:~/Sparky/`
 2. **NGC auth** (once per machine): `docker login nvcr.io` with user `$oauthtoken`,
-   password = NGC API key. Put the same key in `deploy/spark-a/.env`
-   (`NGC_API_KEY=...`) — the Riva NIM also needs it at first start to fetch its
+   password = NGC API key. Put the same key in `deploy/stack/.env`
+   (`NGC_API_KEY=...`) — the ASR NIM also needs it at first start to fetch its
    model profile. Set `HF_CACHE_DIR=/home/<user>/.cache/huggingface` there too.
-3. **Bring up the stack**: `cd deploy/stack && cat ../spark-a/.env
+3. **Bring up the stack**: `cd deploy/stack && cat .env
    ../profiles/<profile>.env > envfile-merged && docker compose --env-file
    envfile-merged up -d --build`. First start downloads ~65GB; watch with
    `docker ps` until all services are `(healthy)`.

@@ -69,7 +69,6 @@ def set_speaker_name(tag: int, name: str):
 _HEALTH_TTL_SECS = 5.0
 _health_cache: dict = {"ts": 0.0, "results": {}}
 _http_client: httpx.AsyncClient | None = None
-_sink_name: str | None = None  # pactl sink discovery is stable per session
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -117,23 +116,6 @@ class VolumeRequest(BaseModel):
     percent: int
 
 
-def _reachy_sink() -> str | None:
-    import subprocess
-
-    global _sink_name
-    if _sink_name is not None:
-        return _sink_name
-    try:
-        out = subprocess.run(["pactl", "list", "short", "sinks"],
-                             capture_output=True, text=True, timeout=5).stdout
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) > 1 and "reachy" in parts[1].lower():
-                _sink_name = parts[1]
-                return _sink_name
-    except Exception as e:
-        logger.warning(f"sink discovery failed: {e}")
-    return None
 
 
 class MuteRequest(BaseModel):
@@ -200,34 +182,18 @@ def _build_app() -> FastAPI:
 
     @app.get("/volume")
     def get_volume():
-        import re
-        import subprocess
-
-        sink = _reachy_sink()
-        if not sink:
-            return {"ok": False, "error": "no_sink"}
-        try:
-            out = subprocess.run(["pactl", "get-sink-volume", sink],
-                                 capture_output=True, text=True, timeout=5).stdout
-            m = re.search(r"(\d+)%", out)
-            return {"ok": True, "percent": int(m.group(1)) if m else None}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        # software gain in the bot's output path: platform-independent
+        # (pactl only existed on Linux and the slider vanished on macOS)
+        from .local_audio import VOLUME
+        return {"ok": True, "percent": VOLUME["percent"]}
 
     @app.post("/volume")
     def set_volume(req: VolumeRequest):
-        import subprocess
-
-        sink = _reachy_sink()
-        if not sink:
-            return {"ok": False, "error": "no_sink"}
-        percent = max(0, min(150, req.percent))
-        try:
-            subprocess.run(["pactl", "set-sink-volume", sink, f"{percent}%"],
-                           check=True, timeout=5)
-            return {"ok": True, "percent": percent}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        from .local_audio import VOLUME
+        percent = max(0, min(120, req.percent))
+        VOLUME["percent"] = percent
+        logger.info(f"Speaker volume set to {percent}%")
+        return {"ok": True, "percent": percent}
 
     @app.get("/status")
     async def status():

@@ -55,9 +55,25 @@ AUDIO_STATS = {
 # transport and its UserStartedSpeaking would interrupt the reply mid-word).
 GATE = {"bot_speaking": False, "tail_until": 0.0, "muted": False}
 
+# Speaker volume as software gain applied to every outgoing sample —
+# works identically on macOS and Linux (pactl only existed on the Sparks
+# and the panel slider vanished whenever the bot ran on a Mac).
+VOLUME = {"percent": max(0, min(120, int(os.getenv("SPEAKER_VOLUME", "100"))))}
+
 
 def gate_active() -> bool:
     return GATE["muted"] or GATE["bot_speaking"] or time.monotonic() < GATE["tail_until"]
+
+
+def _apply_gain(data: bytes) -> bytes:
+    pct = VOLUME["percent"]
+    if pct == 100 or not data:
+        return data
+    import numpy as np
+
+    samples = np.frombuffer(data, dtype=np.int16).astype(np.int32)
+    samples = (samples * pct) // 100
+    return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
 
 class ResilientAudioInput(LocalAudioInputTransport):
@@ -424,6 +440,7 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         async with self._stream_lock:
             if not self._out_stream:
                 return False
+            data = _apply_gain(data)
             self._last_device_write = time.monotonic()
             try:
                 if not self._out_stream.is_active():

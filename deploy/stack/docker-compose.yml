@@ -200,7 +200,9 @@ services:
       - ../tls/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../tls/certs:/etc/nginx/certs:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1:443/ || exit 1"]
+      # measure nginx itself, not the bot behind it: the panel upstream
+      # legitimately 502s whenever the robot roams to another host
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 443 || exit 1"]
       start_period: 1m
       start_interval: 5s
 

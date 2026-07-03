@@ -14,10 +14,10 @@
 # limitations under the License.
 
 import logging
-from typing import get_type_hints, get_origin, get_args, Iterable, Any, Type, TypedDict, List
+from typing import get_type_hints, get_origin, get_args, Iterable, Any, Type, TypedDict
 from collections.abc import Iterable as AbcIterable
 
-from pydantic import BaseModel, create_model, Field, model_validator, ConfigDict
+from pydantic import BaseModel, create_model, Field, model_validator
 from openai.types.chat.completion_create_params import CompletionCreateParamsNonStreaming
 
 logger = logging.getLogger(__name__)

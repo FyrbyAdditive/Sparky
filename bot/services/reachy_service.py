@@ -27,20 +27,6 @@ def _env_bool(name: str, default: bool) -> bool:
 # Daemon process helpers adapted from NVIDIA-AI-IOT/reachy-mini-jetson-assistant
 # (Apache-2.0), app/reachy.py.
 
-def is_daemon_running() -> bool:
-    """Check if a reachy-mini-daemon process exists on this machine."""
-    if not psutil:
-        return False
-    for proc in psutil.process_iter(["cmdline"]):
-        try:
-            cmdline = proc.info.get("cmdline") or []
-            if any("reachy-mini-daemon" in part or "reachy_mini.daemon" in part for part in cmdline):
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessLookupError):
-            continue
-    return False
-
-
 def kill_daemon() -> bool:
     """Kill a stale reachy-mini-daemon process. Returns True if one was found."""
     if not psutil:
@@ -284,7 +270,3 @@ class ReachyService:
         self.connected = False
 
         logger.info("Reachy service disconnected")
-
-    def stop(self):
-        """Alias for disconnect for backwards compatibility."""
-        self.disconnect()

@@ -19,7 +19,6 @@ from pathlib import Path
 from loguru import logger
 
 from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
-from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.local.audio import (
     LocalAudioInputTransport,
     LocalAudioOutputTransport,

@@ -193,35 +193,3 @@ class HeadWobbler:
             finally:
                 queue_ref.task_done()
         logger.debug("Head wobbler thread exited")
-
-    def reset(self) -> None:
-        """Reset the internal state."""
-        with self._state_lock:
-            self._generation += 1
-            self._base_ts = None
-            self._hops_done = 0
-
-        # Drain any queued audio chunks from previous generations
-        drained_any = False
-        while True:
-            try:
-                _, _, _ = self.audio_queue.get_nowait()
-            except queue.Empty:
-                break
-            else:
-                drained_any = True
-                self.audio_queue.task_done()
-
-        with self._sway_lock:
-            self.sway.reset()
-
-        # Reset drop counter
-        if self._dropped_chunks > 0:
-            logger.info(
-                "Reset wobbler - had dropped %d chunks",
-                self._dropped_chunks
-            )
-            self._dropped_chunks = 0
-
-        if drained_any:
-            logger.debug("Head wobbler queue drained during reset")

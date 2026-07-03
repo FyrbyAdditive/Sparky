@@ -139,18 +139,6 @@ class SwayRollRT:
         self.phase_z = float(rng.random() * 2 * math.pi)
         self.t = 0.0
 
-    def reset(self) -> None:
-        """Reset state (VAD/env/buffers/time) but keep initial phases/seed."""
-        self.samples.clear()
-        self.carry = np.zeros(0, dtype=np.float32)
-        self.vad_on = False
-        self.vad_above = 0
-        self.vad_below = 0
-        self.sway_env = 0.0
-        self.sway_up = 0
-        self.sway_down = 0
-        self.t = 0.0
-
     def feed(self, pcm: NDArray[Any], sr: int | None) -> List[Dict[str, float]]:
         """Stream in PCM chunk. Returns a list of sway dicts, one per hop (HOP_MS).
 

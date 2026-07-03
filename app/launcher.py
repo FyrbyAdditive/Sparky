@@ -275,8 +275,8 @@ def main():
     webbrowser.open("http://localhost:7861/")
     say("Press Ctrl+C (or close this window) to quit and hand the robot back.")
 
-    # Supervise: restart crashed children (except repeated fast crashes)
-    crash_counts: dict[str, int] = {}
+    # Supervise: any child exit is stop-the-world (never auto-restart
+    # into live robot hardware)
     try:
         while True:
             time.sleep(3)

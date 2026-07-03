@@ -20,10 +20,6 @@ class ReachyWobblerProcessor(FrameProcessor):
         # Track bot speaking state
         self.bot_is_speaking = False
 
-    def reset_state(self):
-        """Reset processor state (called on disconnect)."""
-        self.bot_is_speaking = False
-
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 

@@ -77,7 +77,7 @@ class PydanticEncoder(json.JSONEncoder):
 def redact_images_from_conversation(conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove image data for router."""
     redacted = []
-    for i, msg in enumerate(conversation):
+    for msg in conversation:
         msg_copy = msg.copy()
         content = msg_copy.get("content")
     
@@ -143,6 +143,8 @@ def _parse_route_response(response: str) -> str:
 class RouterConfig(FunctionBaseConfig, name="router"):
     """Determine the best model given the user intent."""
     llm_name: LLMRef = LLMRef("routing_llm")
+    # Always overridden by config.yml (which adds image_understanding);
+    # this default is only a schema fallback.
     route_config: List[Dict[str, str]] = Field(
         default=[
             {

@@ -53,10 +53,8 @@ class RouterAgentConfig(FunctionBaseConfig, name="ces_tutorial_router_agent"):
 async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
     """Route between chitchat LLM, image LLM, and agent based on user intent."""
     
-    from nat.data_models.api_server import ChatResponse, ChatResponseChoice, Usage, ChoiceMessage
     from ces_tutorial.openai_chat_request import OpenAIChatRequest as ChatRequest
     from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-    import time
     
     # Get the router function
     router_function = await builder.get_function(name=config.router)
@@ -129,164 +127,6 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
         
         return nat_messages
     
-    def _create_chat_response(content, model_name):
-        """Create a ChatResponse from LLM content."""
-        return ChatResponse(
-            id="chatcmpl-" + str(int(time.time())),
-            object="chat.completion",
-            created=int(time.time()),
-            model=model_name,
-            choices=[
-                ChatResponseChoice(
-                    index=0,
-                    message=ChoiceMessage(
-                        role="assistant",
-                        content=content
-                    ),
-                    finish_reason="stop"
-                )
-            ],
-            usage=Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0
-            )
-        )
-    
-    def _log_message_details(messages, prefix="RouterAgent"):
-        """Log detailed information about messages."""
-        for idx, msg in enumerate(messages):
-            msg_dict = msg.model_dump() if hasattr(msg, 'model_dump') else dict(msg)
-            content = msg_dict.get('content')
-            content_type = type(content).__name__
-            
-            if isinstance(content, list):
-                logger.debug(f"{prefix}: Message {idx} - role: {msg_dict.get('role')}, content is list with {len(content)} items")
-                for i, item in enumerate(content):
-                    if isinstance(item, dict):
-                        logger.debug(f"{prefix}:   Item {i} - type: {item.get('type')}, keys: {list(item.keys())}")
-                    else:
-                        logger.debug(f"{prefix}:   Item {i} - {type(item).__name__}")
-            else:
-                logger.debug(f"{prefix}: Message {idx} - role: {msg_dict.get('role')}, content type: {content_type}, length: {len(str(content)) if content else 0}")
-    
-    async def _response_fn(chat_request: ChatRequest) -> ChatResponse:
-        """Route the request based on intent."""
-        
-        try:
-            logger.debug(f"RouterAgent: Processing request with {len(chat_request.messages)} messages")
-
-            # Log message details to check for images (guard: the introspection
-            # itself costs a model_dump per message per turn)
-            if logger.isEnabledFor(logging.DEBUG):
-                _log_message_details(chat_request.messages)
-            
-            # Step 1: Call the router to determine intent
-            logger.debug("RouterAgent: Calling router to determine intent...")
-            try:
-                router_response = await router_function.ainvoke(chat_request)
-                logger.debug(f"RouterAgent: Router response received: {type(router_response)}")
-            except Exception as e:
-                logger.error(f"RouterAgent: Error calling router function: {e}", exc_info=True)
-                raise
-            
-            # Extract the route from the router response
-            try:
-                route = router_response.choices[0].message.content
-                logger.debug(f"RouterAgent: Router determined intent as '{route}'")
-            except Exception as e:
-                logger.error(f"RouterAgent: Error extracting route from response: {e}", exc_info=True)
-                logger.error(f"RouterAgent: Router response structure: {router_response}")
-                raise
-            
-            # Step 2: Route based on the intent
-            if route == "chit_chat":
-                logger.debug("RouterAgent: Routing to chitchat LLM")
-                
-                try:
-                    # Convert messages to LangChain format and redact images
-                    langchain_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=True)
-                    logger.debug(f"RouterAgent: Converted {len(langchain_messages)} messages for chitchat LLM (images redacted)")
-                    
-                    # Call the chitchat LLM (ainvoke: a sync invoke blocks the
-                    # event loop for the whole generation)
-                    response = await chitchat_llm.ainvoke(langchain_messages)
-                    logger.debug(f"RouterAgent: Chitchat LLM response received: {type(response)}")
-                    
-                    # Extract content and create response
-                    content = response.content if hasattr(response, 'content') else str(response)
-                    return _create_chat_response(content, "chitchat")
-                    
-                except Exception as e:
-                    logger.error(f"RouterAgent: Error in chitchat path: {e}", exc_info=True)
-                    raise
-            
-            elif route == "image_understanding":
-                logger.debug("RouterAgent: Routing to image understanding LLM")
-                
-                try:
-                    # Convert messages to LangChain format, preserving images
-                    langchain_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=False)
-                    logger.debug(f"RouterAgent: Converted {len(langchain_messages)} messages for image LLM")
-                    
-                    # Log to verify images are present
-                    for idx, msg in enumerate(langchain_messages):
-                        content = msg.content
-                        if isinstance(content, list):
-                            logger.debug(f"RouterAgent: [IMAGE PATH] Message {idx} has list content with {len(content)} items")
-                            for i, item in enumerate(content):
-                                if isinstance(item, dict) and item.get('type') == 'image_url':
-                                    logger.debug(f"RouterAgent: [IMAGE PATH] Found image_url at message {idx}, item {i}")
-                    
-                    # Call the image LLM (ainvoke: a sync invoke blocks the
-                    # event loop for the whole generation)
-                    response = await image_llm.ainvoke(langchain_messages)
-                    logger.debug(f"RouterAgent: Image LLM response received: {type(response)}")
-                    
-                    # Extract content and create response
-                    content = response.content if hasattr(response, 'content') else str(response)
-                    return _create_chat_response(content, "image_understanding")
-                    
-                except Exception as e:
-                    logger.error(f"RouterAgent: Error in image understanding path: {e}", exc_info=True)
-                    raise
-                    
-            else:  # route == "other" or any other value
-                logger.debug(f"RouterAgent: Routing to agent function for '{route}' intent")
-                
-                try:
-                    # Convert messages to dict format
-                    # NOTE: Set redact_images=False if you want the agent to see images
-                    # (assuming you have a multimodal LLM backing the agent).
-                    nat_messages = _convert_to_nat_messages(chat_request.messages, redact_images=True)
-                    logger.debug(f"RouterAgent: Converted {len(nat_messages)} messages for agent")
-                    
-                    # Manually construct the input dictionary for the agent.
-                    # We pass a dict that matches the standard ChatRequestOrMessage structure.
-                    # The converter in register.py will handle turning this into OpenAIChatRequest.
-                    agent_input = {
-                        "messages": nat_messages,
-                        "model": chat_request.model if hasattr(chat_request, 'model') else "nemotron"
-                    }
-                    
-                    # Call the agent function with the dict
-                    agent_response = await agent_function.ainvoke(agent_input)
-                    logger.debug(f"RouterAgent: Agent response received: {type(agent_response)}")
-                    try:
-                        agent_response.choices[0].message.content = _clean_agent_reply(
-                            agent_response.choices[0].message.content)
-                    except (AttributeError, IndexError):
-                        pass
-                    return agent_response
-                    
-                except Exception as e:
-                    logger.error(f"RouterAgent: Error in agent path: {e}", exc_info=True)
-                    raise
-                    
-        except Exception as e:
-            logger.error(f"RouterAgent: Top-level error in _response_fn: {e}", exc_info=True)
-            raise
-
     from collections.abc import AsyncGenerator
 
     from nat.data_models.api_server import ChatResponseChunk
@@ -341,8 +181,10 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
             yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="agent")
             yield ChatResponseChunk.create_streaming_chunk(None, model="agent", finish_reason="stop")
 
+    # Stream-only: every live client streams (the bot's pipeline always
+    # sets stream=true); the non-streaming single_fn path was unreachable
+    # dead weight and has been removed.
     yield FunctionInfo.create(
-        single_fn=_response_fn,
         stream_fn=_stream_fn,
         description="Route chat requests between chitchat and agent based on intent"
     )

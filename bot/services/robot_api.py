@@ -106,6 +106,30 @@ def _camera_state() -> dict:
         return {}
 
 
+# TTS voice: current selection (seeded from env, boot default) plus the
+# option list fetched once from the Kokoro server itself — the panel offers
+# only voices that are actually installed there. No persistence, matching
+# volume/camera semantics: KOKORO_VOICE is the default on every boot.
+VOICE = {"voice": os.getenv("KOKORO_VOICE", "af_heart"), "options": []}
+
+
+async def _kokoro_voices() -> list[str]:
+    """Installed voices from the Kokoro server, cached after first success."""
+    if VOICE["options"]:
+        return VOICE["options"]
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=3.0)
+    try:
+        base = os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1").rstrip("/")
+        r = await _http_client.get(f"{base}/audio/voices")
+        r.raise_for_status()
+        VOICE["options"] = sorted(v["id"] for v in r.json().get("voices", []))
+    except Exception as e:
+        logger.warning(f"voice list: could not query Kokoro: {e}")
+    return VOICE["options"]
+
+
 def set_speaker_name(tag: int, name: str):
     """Register a name for a speaker tag (pipeline-side helper)."""
     _speaker_names[tag] = name
@@ -249,6 +273,10 @@ class CameraRequest(BaseModel):
     resolution: str
 
 
+class VoiceRequest(BaseModel):
+    voice: str
+
+
 class LookAtRequest(BaseModel):
     direction: str
 
@@ -384,6 +412,8 @@ def _build_app() -> FastAPI:
             "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
             "tools": OPTIONAL_TOOLS,
             "camera": _camera_state(),
+            "voice": {"voice": VOICE["voice"],
+                      "options": await _kokoro_voices()},
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),
                 "router": os.getenv("ROUTER_LLM_MODEL", "?"),
@@ -405,6 +435,34 @@ def _build_app() -> FastAPI:
             pass
         finally:
             _ws_queues.discard(q)
+
+    # --- TTS voice selection (applies from the next spoken sentence) ---
+
+    @app.get("/voice")
+    async def voice():
+        return {"ok": True, "voice": VOICE["voice"],
+                "options": await _kokoro_voices()}
+
+    @app.post("/voice")
+    async def set_voice(req: VoiceRequest):
+        from pipecat.frames.frames import TTSUpdateSettingsFrame
+        from pipecat.services.openai import tts as openai_tts
+        from pipecat.services.openai.tts import OpenAITTSService
+
+        value = req.voice.strip()
+        options = await _kokoro_voices()
+        if value not in options:
+            return {"ok": False, "error": "unknown_voice", "options": options}
+        # the constructor only registered the boot voice; keep the OpenAI
+        # base class's client-side validation happy for the new one
+        openai_tts.VALID_VOICES[value] = value
+        ok = _queue_frames([TTSUpdateSettingsFrame(
+            delta=OpenAITTSService.Settings(voice=value))])
+        if not ok:
+            return {"ok": False, "error": "no_session"}
+        VOICE["voice"] = value
+        logger.info(f"TTS voice set to {value}")
+        return {"ok": True, "voice": value, "options": options}
 
     # --- camera capture settings + live stream ---
 

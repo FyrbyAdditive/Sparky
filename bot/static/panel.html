@@ -245,6 +245,10 @@
       <summary>Speakers</summary>
       <div class="secBody"><div id="speakerList"></div></div>
     </details>
+    <details class="sec" id="sec-voice">
+      <summary>Voice</summary>
+      <div class="secBody"><select id="voiceSel"></select></div>
+    </details>
     <details class="sec" id="sec-tools">
       <summary>Tools</summary>
       <div class="secBody"><div id="toolList"></div></div>
@@ -403,6 +407,42 @@ function syncCamera(cam) {
   if (document.activeElement !== sel) sel.value = cam.resolution;
 }
 
+/* ---------- TTS voice section ---------- */
+// group 67 Kokoro voices by prefix so the dropdown stays navigable
+const VOICE_GROUPS = [
+  ['af_', 'American female'], ['am_', 'American male'],
+  ['bf_', 'British female'],  ['bm_', 'British male'],
+];
+function voiceGroupLabel(id) {
+  const g = VOICE_GROUPS.find(([p]) => id.startsWith(p));
+  return g ? g[1] : 'Other languages';
+}
+let voiceLoaded = false;
+function syncVoice(v) {
+  if (!v || !v.options || !v.options.length) return;
+  const sel = $('voiceSel');
+  if (!voiceLoaded) {
+    sel.innerHTML = '';
+    const order = ['American female', 'American male', 'British female',
+                   'British male', 'Other languages'];
+    const groups = {};
+    v.options.forEach(id => (groups[voiceGroupLabel(id)] ||= []).push(id));
+    order.filter(g => groups[g]).forEach(g => {
+      const og = document.createElement('optgroup');
+      og.label = g;
+      groups[g].forEach(id => {
+        const o = document.createElement('option');
+        o.value = id; o.textContent = id;
+        og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+    sel.onchange = () => post('/voice', {voice: sel.value});
+    voiceLoaded = true;
+  }
+  if (document.activeElement !== sel) sel.value = v.voice;
+}
+
 /* ---------- speakers section ---------- */
 function syncSpeakers(speakers) {
   const list = $('speakerList');
@@ -503,6 +543,7 @@ async function refreshStatus() {
     }
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     syncCamera(s.camera);
+    syncVoice(s.voice);
     syncSpeakers(s.speakers);
     syncTools(s.tools);
     if (s.muted !== muted) setMuted(s.muted);

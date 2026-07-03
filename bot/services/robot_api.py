@@ -38,6 +38,23 @@ _api_loop: asyncio.AbstractEventLoop | None = None
 _history: collections.deque = collections.deque(maxlen=200)
 _ws_queues: set = set()
 
+# Speaker-name registry (diarization): 0-based speaker tag -> known name.
+# Written by POST /speakers (panel or the NAT remember-speaker tool), read
+# by the pipeline's SpeakerLabelerProcessor (plain cross-thread dict read,
+# same pattern as _session).
+_speaker_names: dict[int, str] = {}
+
+
+def get_speaker_name(tag: int) -> str | None:
+    """Known name for a 0-based diarization speaker tag, else None."""
+    return _speaker_names.get(tag)
+
+
+def set_speaker_name(tag: int, name: str):
+    """Register a name for a speaker tag (pipeline-side helper)."""
+    _speaker_names[tag] = name
+    logger.info(f"Speaker registry: Speaker {tag + 1} -> {name}")
+
 # /status support (all touched only from the API server's event loop):
 # short-TTL health cache so several open panels don't multiply probes into
 # the live inference engines, plus one long-lived client for keep-alive.
@@ -117,6 +134,12 @@ class MuteRequest(BaseModel):
 
 class PlayAnimationRequest(BaseModel):
     name: str
+
+
+class SpeakerNameRequest(BaseModel):
+    # display-number form as users see it: 1, "1", "Speaker 1"
+    speaker: int | str
+    name: str = ""
 
 
 class LookAtRequest(BaseModel):
@@ -264,6 +287,7 @@ def _build_app() -> FastAPI:
             "muted": bool(gate.muted) if gate else False,
             "audio": audio,
             "session_active": _session["task"] is not None,
+            "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),
                 "router": os.getenv("ROUTER_LLM_MODEL", "?"),
@@ -285,6 +309,43 @@ def _build_app() -> FastAPI:
             pass
         finally:
             _ws_queues.discard(q)
+
+    # --- speaker registry (diarization) ---
+
+    @app.get("/speakers")
+    def speakers():
+        return {"ok": True,
+                "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())}}
+
+    @app.post("/speakers")
+    def set_speaker(req: SpeakerNameRequest):
+        import re
+
+        m = re.search(r"(\d+)", str(req.speaker))
+        if m:
+            display = int(m.group(1))
+            if not 1 <= display <= 8:
+                return {"ok": False, "error": "speaker number out of range"}
+            tag = display - 1
+        else:
+            # already-named speaker referenced by name (panel rename)
+            wanted = str(req.speaker).strip().lower()
+            tag = next((t for t, n in _speaker_names.items() if n.lower() == wanted), None)
+            if tag is None:
+                return {"ok": False, "error": "speaker must be a number, 'Speaker N', or a known name"}
+            display = tag + 1
+        name = req.name.strip().strip("'\"")
+        # a "name" that is itself a speaker label is always a confused caller
+        if re.fullmatch(r"speaker\s*\d*", name, re.IGNORECASE):
+            return {"ok": False, "error": "that is a label, not a name"}
+        if name and name.lower() not in ("forget", "none", "clear", "unknown"):
+            _speaker_names[tag] = name
+            logger.info(f"Speaker registry: Speaker {display} -> {name}")
+        else:
+            _speaker_names.pop(tag, None)
+            logger.info(f"Speaker registry: Speaker {display} forgotten")
+        return {"ok": True,
+                "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())}}
 
     # --- robot actions (also used by the NAT agent tools) ---
 

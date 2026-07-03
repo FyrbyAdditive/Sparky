@@ -106,11 +106,25 @@ let muted = false;
 function addMsg(item) {
   const div = document.createElement('div');
   div.className = 'msg ' + (item.role === 'user' ? 'user' : 'assistant');
-  div.innerHTML = '<div class="who">' + (item.role === 'user' ? 'you' : 'sparky') + '</div>';
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = item.role === 'user' ? (item.speaker || 'you') : 'sparky';
+  if (item.role === 'user' && item.speaker) {
+    who.style.cursor = 'pointer';
+    who.title = 'Click to name this speaker';
+    who.onclick = () => renameSpeaker(item.speaker);
+  }
+  div.appendChild(who);
   div.appendChild(document.createTextNode(item.text));
   const t = $('transcript');
   t.appendChild(div);
   t.scrollTop = t.scrollHeight;
+}
+
+async function renameSpeaker(label) {
+  const name = prompt('Name for ' + label + ' (empty to forget):');
+  if (name === null) return;
+  await post('/speakers', {speaker: label, name: name.trim()});
 }
 
 function connectWS() {

@@ -36,6 +36,7 @@ from services.mic_gate import MicGateProcessor
 from services.reachy_service import ReachyService
 from services.processor import ReachyWobblerProcessor
 from services.robot_api import start_robot_api, attach_session, push_transcript
+from services.speaker_labels import SpeakerLabelerProcessor
 from services.robot_camera import RobotCameraResponder
 from services.transcript_tap import TranscriptTap
 
@@ -81,7 +82,12 @@ PERSONA = (
     "special characters. Vary your phrasing; never repeat earlier sentences or "
     "reintroduce yourself. Stay aware of the whole conversation and refer back "
     "to things the user said. You can see through your camera when asked about "
-    "the surroundings, and you can move: nod, look around, wiggle your antennas."
+    "the surroundings, and you can move: nod, look around, wiggle your antennas. "
+    "You may hear several different people. Each line of user speech is prefixed "
+    "with who said it, like 'Speaker 1:' or their name once known. Keep track of "
+    "who said what and address people by name when you know it. When someone "
+    "tells you their name, or names another speaker, use your remember-speaker "
+    "tool to store it. Do not claim to recognize voices beyond these labels."
 )
 
 
@@ -183,6 +189,14 @@ async def run_bot():
         stop_history=int(os.getenv("RIVA_STOP_HISTORY_MS", "-1")),
         stop_history_eou=int(os.getenv("RIVA_STOP_HISTORY_EOU_MS", "-1")),
         stop_threshold_eou=float(os.getenv("RIVA_STOP_THRESHOLD_EOU", "-1.0")),
+        # The NIM embeds the streaming sortformer diarizer: tag every word
+        # with a speaker (stable per stream, up to 4). SpeakerLabelerProcessor
+        # turns the tags into "Speaker N:"/name prefixes downstream.
+        settings=NvidiaSTTService.Settings(
+            speaker_diarization=os.getenv("SPEAKER_DIARIZATION", "1").strip() != "0",
+            diarization_max_speakers=int(os.getenv("DIARIZATION_MAX_SPEAKERS", "4")),
+            word_time_offsets=True,  # tags ride on words[]; keep it populated
+        ),
     )
 
     # Streaming TTS from the local Kokoro-FastAPI server.
@@ -220,8 +234,9 @@ async def run_bot():
             RobotCameraResponder(),  # answer image requests from the robot camera
             mic_gate,  # panel mute + optional speak-time gating
             stt,
+            EmotionReactorProcessor(),  # sentiment on RAW text (before labels)
+            SpeakerLabelerProcessor(),  # bake "Speaker N:"/name into finals
             TranscriptTap("user", push_transcript),
-            EmotionReactorProcessor(),  # react to user sentiment with animations
             context_aggregator.user(),
             llm,
             tts,
@@ -251,8 +266,12 @@ async def run_bot():
         mic_gate=mic_gate,
     )
 
-    # Greet on startup through the robot speaker.
-    messages[0]["content"] += " You just powered on: start by greeting the user briefly."
+    # Greet on startup through the robot speaker. Must be a USER turn: a
+    # conversation with only a system message 400s on the chat endpoint
+    # ("No user query found"), which made the robot's first words a spoken
+    # apology at every launch.
+    messages.append({"role": "user",
+                     "content": "(startup) You just powered on: greet the user briefly."})
     await task.queue_frames([LLMRunFrame()])
 
     runner = PipelineRunner()

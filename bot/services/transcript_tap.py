@@ -22,7 +22,11 @@ class TranscriptTap(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if self._role == "user" and isinstance(frame, TranscriptionFrame) and frame.text:
-            self._callback({"role": "user", "text": frame.text})
+            item = {"role": "user", "text": frame.text}
+            # SpeakerLabelerProcessor stores the display label in user_id
+            if frame.user_id:
+                item["speaker"] = frame.user_id
+            self._callback(item)
         elif self._role == "assistant" and isinstance(frame, TTSTextFrame) and frame.text:
             self._callback({"role": "assistant", "text": frame.text})
 

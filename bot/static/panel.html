@@ -53,6 +53,7 @@
   <span id="robotChip" class="chip">robot: …</span>
   <span id="sessionChip" class="chip">session: …</span>
   <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
+  <button id="estopBtn" title="Emergency stop: halt motion, release motors, mute" style="background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700">■ STOP</button>
 </header>
 <main>
   <div id="left">
@@ -143,6 +144,11 @@ function play(name) { post('/robot/play_animation', {name}); }
 
 $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 $('speakText').addEventListener('keydown', e => { if (e.key === 'Enter') sendSpeak(); });
+$('estopBtn').onclick = async () => {
+  if (!confirm('Emergency stop: halt all motion and release the motors?')) return;
+  await post('/estop', {});
+  $('estopBtn').textContent = '■ STOPPED';
+};
 $('muteBtn').onclick = async () => {
   muted = !muted;
   await post('/mute', {muted});

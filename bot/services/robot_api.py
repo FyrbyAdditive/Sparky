@@ -276,6 +276,38 @@ def _build_app() -> FastAPI:
         service.look_at(direction)
         return {"ok": True}
 
+    @app.post("/estop")
+    def estop():
+        """Emergency stop: halt motion, release torque, mute the mic."""
+        results = {}
+        try:
+            gate = _session["mic_gate"]
+            if gate:
+                gate.set_muted(True)
+            results["muted"] = True
+        except Exception as e:
+            results["muted"] = str(e)
+        try:
+            if service.motion_manager:
+                service.motion_manager.stop()
+            results["motion_stopped"] = True
+        except Exception as e:
+            results["motion_stopped"] = str(e)
+        try:
+            robot = service.robot
+            if robot is not None:
+                for meth in ("disable_motors", "turn_off"):
+                    fn = getattr(robot, meth, None)
+                    if fn:
+                        fn()
+                        results["torque_released"] = meth
+                        break
+        except Exception as e:
+            results["torque_released"] = str(e)
+        service.connected = False
+        logger.warning(f"EMERGENCY STOP: {results}")
+        return {"ok": True, **results}
+
     @app.get("/health")
     def health():
         return {"status": "ok", "robot_connected": service.connected}

@@ -230,7 +230,7 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         await self.set_transport_ready(frame)
         if self._flusher_task is None:
             self._flusher_task = self.create_task(self._pending_flusher())
-            self.create_task(self._silence_feeder())
+            self.create_task(self._idle_pauser())
 
     def _preroll_bytes(self) -> int:
         return int(2 * self._preroll_secs * (self._sample_rate or 24000))
@@ -240,6 +240,8 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
             return False
         self._last_device_write = time.monotonic()
         try:
+            if not self._out_stream.is_active():
+                await self.get_event_loop().run_in_executor(self._executor, self._out_stream.start_stream)
             await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
             return True
         except Exception as e:
@@ -299,18 +301,19 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
 
         return await self._device_write(frame.audio)
 
-    async def _silence_feeder(self):
-        """An open-but-idle stream underruns; through the pipewire ALSA plugin
-        that replays stale buffer fragments as periodic noise bursts. Keep the
-        stream fed with silence whenever no real audio flowed recently."""
-        chunk_secs = 0.08
+    async def _idle_pauser(self):
+        """Stop the stream when no audio has flowed for a while: a stopped
+        stream can neither underrun (periodic noise bursts) nor need silence
+        injection (which stuttered speech when injected mid-utterance).
+        _device_write restarts it, and the pre-roll cushions the resume."""
         while True:
-            await asyncio.sleep(chunk_secs / 2)
-            if (self._out_stream and not self._pending
-                    and (time.monotonic() - self._last_device_write) > chunk_secs):
-                silence = b"\x00" * int(2 * chunk_secs * (self._sample_rate or 24000))
+            await asyncio.sleep(0.25)
+            if (self._out_stream and self._out_stream.is_active()
+                    and not self._pending
+                    and (time.monotonic() - self._last_device_write) > 1.0):
                 try:
-                    await self._device_write(silence)
+                    await self.get_event_loop().run_in_executor(
+                        self._executor, self._out_stream.stop_stream)
                 except Exception:
                     pass
 

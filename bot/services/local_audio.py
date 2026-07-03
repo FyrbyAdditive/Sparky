@@ -192,10 +192,26 @@ class ResilientAudioOutput(LocalAudioOutputTransport):
 
 
 class DeepBufferedOutput(LocalAudioOutputTransport):
-    """Stage-1 minimal change: 100ms output buffers, nothing else.
+    """Deep buffers + utterance pre-roll.
 
-    The stock buffer underruns audibly (rapid stutter) at utterance start.
+    Two distinct start-of-speech stutter causes, both fixed here:
+    - tiny device buffers underrun on write jitter -> 100ms frames_per_buffer
+    - TTS chunks arrive at synthesis cadence at utterance start while the
+      device drains in exact realtime, so every arrival gap is an audible
+      underrun until cushion builds -> hold PREROLL_MS of audio before
+      starting playback of each utterance (flushed early if TTS pauses).
     """
+
+    def __init__(self, py_audio, params):
+        super().__init__(py_audio, params)
+        import os
+
+        self._preroll_secs = float(os.getenv("PREROLL_MS", "300")) / 1000.0
+        self._pending: list[bytes] = []
+        self._pending_bytes = 0
+        self._last_frame_at = 0.0
+        self._last_device_write = 0.0
+        self._flusher_task = None
 
     async def start(self, frame: StartFrame):
         await super(LocalAudioOutputTransport, self).start(frame)
@@ -212,6 +228,48 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         )
         self._out_stream.start_stream()
         await self.set_transport_ready(frame)
+        if self._flusher_task is None:
+            self._flusher_task = self.create_task(self._pending_flusher())
+
+    def _preroll_bytes(self) -> int:
+        return int(2 * self._preroll_secs * (self._sample_rate or 24000))
+
+    async def _device_write(self, data: bytes) -> bool:
+        if not self._out_stream:
+            return False
+        self._last_device_write = time.monotonic()
+        await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
+        return True
+
+    async def _flush_pending(self) -> bool:
+        if not self._pending:
+            return True
+        data = b"".join(self._pending)
+        self._pending.clear()
+        self._pending_bytes = 0
+        return await self._device_write(data)
+
+    async def _pending_flusher(self):
+        # An utterance shorter than the pre-roll (or a synthesis stall) must
+        # still play: flush whatever is held once frames stop arriving.
+        while True:
+            await asyncio.sleep(0.06)
+            if self._pending and (time.monotonic() - self._last_frame_at) > 0.15:
+                await self._flush_pending()
+
+    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        now = time.monotonic()
+        new_utterance = (now - self._last_device_write) > 0.5 and not self._pending
+        self._last_frame_at = now
+
+        if new_utterance or self._pending:
+            self._pending.append(frame.audio)
+            self._pending_bytes += len(frame.audio)
+            if self._pending_bytes >= self._preroll_bytes():
+                return await self._flush_pending()
+            return True
+
+        return await self._device_write(frame.audio)
 
 
 class DeepBufferedLocalAudioTransport(LocalAudioTransport):

@@ -84,3 +84,23 @@ conversations. The router split is what moves perceived latency.
   the mic array exposes a hardware-AEC channel or PipeWire fixes the stall.
 - Mic health after fix: frame age steady at 0.1s, zero watchdog reopens.
 - Panel gains volume slider (pactl on Reachy sink) + mic-flow telemetry.
+
+## duo-2spark split live (2026-07-03 morning)
+
+Audio on magi (robot host), inference on shodan, ConnectX-7 link
+(192.168.100.0/24, 70.9 Gbit/s TCP measured; both machines' default route
+is WiFi — the link keeps inference off the air).
+
+| metric | all-on-magi | duo split |
+|---|---|---|
+| agent TTFT (warm, direct) | 430ms | **20-60ms** (prefix cache + dedicated box) |
+| effective decode | ~43 tok/s | **47-72 tok/s** |
+| NAT chitchat first chunk | 0.91-0.94s | 1.08s (router local to NAT on magi) |
+| wiki query (FULL 9GB index) | 6-14s | **0.4-0.6s** (RAM-cached on shodan) |
+| magi memory free | ~26GB | **~91GB** (stutter-contention hypothesis test) |
+
+Lessons: engine carries ~30GB host-side overhead beyond its GPU fraction
+(shodan OOM'd userspace at fraction 0.65 + simultaneous bring-up; budget
+everything to fit boot storms). Router placed WITH NAT on the robot host
+(tiny + fastest routing hop). Rollback: flip .env + docker start the
+stopped magi containers.

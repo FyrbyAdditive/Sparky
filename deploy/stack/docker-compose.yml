@@ -171,6 +171,8 @@ services:
     restart: unless-stopped
     profiles: [ "wiki" ]
     container_name: wiki-offline
+    # hard cap: the full index + torch must never compound an engine spike
+    mem_limit: 16g
     build:
       context: ../wiki-offline
     ports:

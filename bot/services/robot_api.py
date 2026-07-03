@@ -225,7 +225,7 @@ def _build_app() -> FastAPI:
         if _t.monotonic() - _health_cache["ts"] < _HEALTH_TTL_SECS:
             results = _health_cache["results"]
         else:
-            # de-duplicate identical URLs (unified profile points several roles at one engine)
+            # de-duplicate identical URLs (several roles share the one shodan engine)
             targets = health_targets()
             unique = {}
             for name, url in targets.items():

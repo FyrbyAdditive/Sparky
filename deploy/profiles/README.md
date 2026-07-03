@@ -1,48 +1,26 @@
-# Model profiles
+# Host configuration
 
-A profile is two small env files — nothing else changes between model setups:
+The platform is exactly two Sparks plus (optionally) a roaming bot host.
+Four files configure everything:
 
-- `<name>.env` — **Spark-side**: consumed by `docker compose --env-file`.
-  Sets `COMPOSE_PROFILES` (which services run) and the model/memory knobs the
-  compose files parameterize (`AGENT_MODEL`, `*_GPU_FRACTION`, `*_EXTRA_ARGS`, …).
-- `<name>.bot.env` — **bot-host-side**: copied/merged into the repo-root `.env`.
-  Points each logical role (agent, chitchat, vision, router, STT, TTS, wiki) at
-  the right host:port and model name. `${SPARK_A_HOST}`-style references expand
-  via python-dotenv on the bot host.
+| File | Applies to | Purpose |
+|---|---|---|
+| `magi.env` | magi (Spark) | `COMPOSE_PROFILES=magi` + router knobs — brings up nemotron-asr, kokoro-tts, vllm-router, tls-proxy |
+| `shodan.env` | shodan (Spark) | `COMPOSE_PROFILES=shodan` + agent/wiki knobs — brings up vllm-agent (Qwen3.6-35B) and wiki-offline |
+| `magi.bot.env` | magi (bot host) | Bot trio env when the robot lives on magi; copy to the repo root as `.env` (systemd units read it) |
+| `remote-client.bot.env` | Mac/Linux | Template consumed by `app/launcher.py` — `@AUDIO_HOST@`/`@LLM_HOST@` filled in by the first-run wizard |
 
-## Shipped profiles
-
-| Profile | Sparks | Text model | Vision | Notes |
-|---|---|---|---|---|
-| `parity-1spark` (default) | 1 | Nemotron-3-Nano-30B-A3B-FP8 | Nemotron-Nano-12B-v2-VL-FP8 | Same models as the upstream cloud demo |
-| `unified-1spark` | 1 | Qwen3.6-35B-A3B-NVFP4 (MTP) | same model (multimodal) | Fastest; one endpoint serves every role |
-| `quality-2spark-split` | 2 | Nemotron-3-Super-120B-A12B-NVFP4 (MTP) on A | 12B-v2-VL on B | Best quality with predictable latency |
-| `max-2spark-tp2` | 2 | Qwen3-235B-A22B-FP4, TP=2 over RoCE | 12B-v2-VL on B | Maximum quality; see `deploy/tp2/` + `interconnect.md` |
-| **`duo-2spark`** (current) | 2 | Qwen3.6-35B NVFP4+MTP on shodan (fraction 0.50, 48k ctx — 0.65 OOM'd the host, see BENCHMARKS) | same model | Audio (Riva/Kokoro/phi-3 router/panel) on the robot host; inference + full wiki index on the other Spark over the 200GbE link |
-
-## Usage
+## Spark bring-up (per host)
 
 ```bash
-# Any host: the consolidated stack + a profile env file selecting its roles
-cd deploy/stack && docker compose --env-file ../profiles/duo-2spark.env up -d --build      # inference host
-cd deploy/stack && docker compose --env-file ../profiles/duo-2spark-magi.env up -d         # robot/audio host
-# Bot host
-cp deploy/profiles/duo-2spark.bot.env .env
+cd deploy/stack
+cp ../.env.example .env            # once: NGC key etc. (gitignored)
+cat .env ../profiles/<host>.env > envfile-merged
+docker compose --env-file envfile-merged up -d --build
 ```
-(Roles: audio / llm / vision / wiki — combine freely for single-Spark setups.
-The legacy spark-a/spark-b directories are superseded by deploy/stack.)
 
-## Adding a profile (e.g. a faster or newer model)
+Regenerate `envfile-merged` after any env edit — it goes stale silently.
 
-1. Copy the closest `.env` pair under a new name.
-2. Spark side: change `AGENT_MODEL`/`VISION_MODEL`/fractions; put model-specific
-   vLLM flags (speculative/MTP config, mamba cache dtype, quantization) in
-   `*_EXTRA_ARGS`. `COMPOSE_PROFILES` picks which containers run: `parity`
-   (3 LLMs + speech), `unified` (1 LLM + speech), `split` (agent LLM only).
-3. Bot side: update the `*_LLM_MODEL` names and hosts to match.
-4. Benchmark it: `python scripts/bench.py` (see repo README) and record results
-   in `deploy/BENCHMARKS.md`.
-
-Candidate models worth trying as they land in the Spark vLLM builds:
-`Qwen3.5-122B-A10B` (NVFP4 + MTP single-Spark recipe exists), `GLM-4.7-Flash`,
-`Nemotron-3-Nano-Omni-30B-A3B` (audio+vision+text in one model).
+Model/memory knobs live in the host env files; the measured budgets and the
+"engines carry ~30GB host-side overhead" rule are documented in
+`deploy/README.md` and `deploy/BENCHMARKS.md`.

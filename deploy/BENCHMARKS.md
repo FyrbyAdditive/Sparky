@@ -1,3 +1,7 @@
+> NOTE: sections before "duo-2spark split live" describe retired layouts
+> (single-Spark parity/unified, alt two-Spark strategies) kept as history.
+> The platform is now fixed at two Sparks: magi (audio) + shodan (inference).
+
 # Benchmark results
 
 ## magi — parity-1spark (2026-07-02)

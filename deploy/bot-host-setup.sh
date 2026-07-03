@@ -29,6 +29,6 @@ echo
 echo "Done. Re-login for group changes, then:"
 echo "  1. start the robot daemon:  cd bot && uv run -m reachy_mini.daemon.app.main --no-localhost-only"
 echo "     (add --sim for simulation; on macOS use mjpython for sim)"
-echo "  2. cp deploy/profiles/<profile>.bot.env .env   # set SPARK_A_HOST"
+echo "  2. cp deploy/profiles/magi.bot.env .env   # (roaming clients: use app/launcher.py instead)"
 echo "  3. start NAT:  cd nat && uv run --env-file ../.env nat serve --config_file src/ces_tutorial/config.yml --port 8001"
 echo "  4. start bot:  cd bot && uv run --env-file ../.env python main.py"

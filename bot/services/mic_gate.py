@@ -39,7 +39,7 @@ class MicGateProcessor(FrameProcessor):
     def __init__(self):
         super().__init__()
         self.muted = False
-        self._gate_while_speaking = os.getenv("ECHO_MODE", "aec").strip().lower() == "gate"
+        self._gate_while_speaking = os.getenv("ECHO_MODE", "gate").strip().lower() == "gate"
         self._bot_speaking = False
         self._bot_started_at = 0.0
         self._bot_stopped_at = 0.0

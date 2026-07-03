@@ -288,82 +288,6 @@ class ResilientAudioInput(LocalAudioInputTransport):
         await super().cleanup()
 
 
-class ResilientAudioOutput(LocalAudioOutputTransport):
-    def __init__(self, py_audio, params):
-        super().__init__(py_audio, params)
-        self._last_reopen = 0.0
-        self._last_write = 0.0
-        self._silence_task = None
-
-    async def start(self, frame: StartFrame):
-        # Reimplemented to deep-buffer the output: the default tiny buffer
-        # underruns audibly (rapid stutter) at the start of each utterance.
-        await super(LocalAudioOutputTransport, self).start(frame)
-        if self._out_stream:
-            return
-        self._sample_rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
-        await asyncio.get_running_loop().run_in_executor(None, self._open)
-        await self.set_transport_ready(frame)
-        if self._silence_task is None:
-            # An open-but-idle stream underruns; through the pipewire ALSA
-            # plugin that replays stale buffer fragments as periodic noise
-            # bursts. Keep the stream fed with silence between utterances.
-            self._silence_task = self.create_task(self._silence_feeder())
-
-    async def _silence_feeder(self):
-        chunk_secs = 0.08
-        silence = b"\x00" * int(2 * chunk_secs * (self._sample_rate or 24000))
-        while True:
-            await asyncio.sleep(chunk_secs / 2)
-            if self._out_stream and (time.monotonic() - self._last_write) > chunk_secs:
-                self._last_write = time.monotonic()
-                try:
-                    await self.get_event_loop().run_in_executor(
-                        self._executor, self._out_stream.write, silence
-                    )
-                except Exception:
-                    pass  # real writes handle reopen
-
-    def _open(self):
-        self._out_stream = self._py_audio.open(
-            format=self._py_audio.get_format_from_width(2),
-            channels=self._params.audio_out_channels,
-            rate=self._sample_rate,
-            frames_per_buffer=int(self._sample_rate / 10),  # 100ms
-            output=True,
-            output_device_index=self._params.output_device_index,
-        )
-        self._out_stream.start_stream()
-
-    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
-        self._last_write = time.monotonic()
-        try:
-            return await super().write_audio_frame(frame)
-        except Exception as e:
-            AUDIO_STATS["out_write_errors"] += 1
-            now = time.monotonic()
-            if now - self._last_reopen > REOPEN_COOLDOWN_SECS:
-                self._last_reopen = now
-                logger.warning(f"ResilientAudioOutput: write failed ({e}), reopening stream")
-                AUDIO_STATS["out_reopens"] += 1
-                try:
-                    await asyncio.get_running_loop().run_in_executor(None, self._reopen)
-                    return await super().write_audio_frame(frame)
-                except Exception as e2:
-                    logger.error(f"ResilientAudioOutput: reopen failed: {e2}")
-            return False
-
-    def _reopen(self):
-        old = self._out_stream
-        self._out_stream = None
-        try:
-            if old:
-                old.close()
-        except Exception:
-            pass
-        self._open()
-        logger.info("ResilientAudioOutput: output stream reopened")
-
 
 class DeepBufferedOutput(LocalAudioOutputTransport):
     """Deep buffers + utterance pre-roll.
@@ -552,17 +476,3 @@ class DeepBufferedLocalAudioTransport(LocalAudioTransport):
         return self._output
 
 
-class ResilientLocalAudioTransport(LocalAudioTransport):
-    def input(self) -> FrameProcessor:
-        if not self._input:
-            import pyaudio
-
-            # Own PortAudio instance: sharing one across duplex streams via
-            # the pipewire plugin contributed to capture stalls.
-            self._input = ResilientAudioInput(pyaudio.PyAudio(), self._params)
-        return self._input
-
-    def output(self) -> FrameProcessor:
-        if not self._output:
-            self._output = ResilientAudioOutput(self._pyaudio, self._params)
-        return self._output

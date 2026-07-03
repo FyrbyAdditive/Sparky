@@ -3,41 +3,40 @@
 A real-time voice + vision AI assistant controlling a **Reachy Mini** robot, running
 **entirely on local hardware** — no cloud APIs, no API keys at runtime. Forked from
 [brevdev/reachy-personal-assistant](https://github.com/brevdev/reachy-personal-assistant)
-with every cloud service replaced by a local equivalent on one or two **NVIDIA DGX Sparks**:
+with every cloud service replaced by a local equivalent on **two NVIDIA DGX Sparks**
+("magi" = speech + routing, "shodan" = inference), linked by a 200GbE ConnectX-7
+interconnect:
 
-| Capability | Original (cloud) | This fork (local) |
+| Capability | Original (cloud) | This platform (local) |
 |---|---|---|
-| Speech-to-text | ElevenLabs API | Riva Parakeet NIM (streaming, on Spark) |
-| Text-to-speech | ElevenLabs API | Kokoro-82M (Kokoro-FastAPI, on Spark) |
-| Agent + chat LLM | NVIDIA cloud (`nemotron-3-nano-30b-a3b`) | Same model, vLLM FP8 on Spark |
-| Vision LLM | NVIDIA cloud (`nemotron-nano-12b-v2-vl`) | Same model, vLLM FP8 on Spark |
-| Intent router | NVIDIA cloud (`phi-3-mini`) | Same model, vLLM on Spark |
-| Wikipedia tool | wikipedia.org | Offline txtai semantic index (~9GB) |
-| WebRTC transport | Daily (optional cloud) | Local small-webrtc only |
+| Speech-to-text + diarization | ElevenLabs API | Nemotron 3.5 streaming ASR NIM + sortformer speaker diarization (magi) |
+| Text-to-speech | ElevenLabs API | Kokoro-82M (Kokoro-FastAPI, magi) |
+| Agent / chat / vision LLM | NVIDIA cloud (three models) | One multimodal Qwen3.6-35B-A3B NVFP4 + MTP, vLLM (shodan) |
+| Intent router | NVIDIA cloud (`phi-3-mini`) | Same model, vLLM (magi, plus deterministic pre-routes) |
+| Wikipedia tool | wikipedia.org | Offline txtai semantic index (~9GB, shodan) |
+| Web UI | Daily WebRTC playground | Robot-native audio + local control panel (live camera, transcript, controls) |
 
-The agent uses an intelligent LLM router to dynamically route between a chat model,
-a vision-language model, and a ReAct agent with tools. Model choices are **profile-based
-and swappable** (see `deploy/`) — including modern MoE/MTP upgrades and dual-Spark
-configurations over the 200GbE ConnectX-7 interconnect.
+The agent routes each turn between chat, vision and a tool-using ReAct agent
+(movement, offline Wikipedia, speaker naming). The robot tells speakers apart
+and learns their names.
 
 ## Architecture
 
 Three components run in parallel on the *bot host* (a Spark with the robot on USB, or a
 Mac/Linux machine on the same LAN):
 
-1. **Reachy Mini Daemon** — controls the robot hardware (or MuJoCo simulation)
-2. **Bot Service** (pipecat) — WebRTC UI, VAD/turn-taking (local ONNX), streams STT/TTS,
-   drives robot motion (breathing, sway, speech wobble, animations)
-3. **NeMo Agent Service** (NAT) — router + ReAct agent, fans out to local vLLM endpoints
+1. **Reachy Mini Daemon** — controls the robot hardware (or MuJoCo simulation for dev)
+2. **Bot Service** (pipecat) — robot-native audio, VAD/turn-taking (local ONNX),
+   streaming STT/TTS, speaker labeling, control panel, robot motion
+3. **NeMo Agent Service** (NAT) — router + ReAct agent, fans out to the Spark endpoints
 
-All inference services run on the Spark(s) — see [deploy/README.md](deploy/README.md).
+All inference services run on the two Sparks — see [deploy/README.md](deploy/README.md).
 
 ## Prerequisites
 
 - [uv](https://github.com/astral-sh/uv) package manager (bot host)
 - Python 3.13 (bot), 3.12+ (nat) — uv installs these automatically
-- One or two DGX Sparks running the inference stack (`deploy/`), or any
-  OpenAI-compatible + Riva endpoints on your LAN
+- Two DGX Sparks running the inference stack (`deploy/`)
 - One-time online setup to download models/containers; **runtime is fully offline**
 
 ## Setup
@@ -49,9 +48,9 @@ See [deploy/README.md](deploy/README.md). Verify health checks pass.
 ### 2. Create the environment file
 
 ```bash
-cp .env.template .env
-# Edit: point RIVA_SERVER, KOKORO_BASE_URL, *_LLM_BASE_URL at your Spark's IP.
-# Defaults assume everything runs on this machine.
+# Robot on magi:      cp deploy/profiles/magi.bot.env .env
+# Roaming Mac/Linux:  handled by app/launcher.py (writes ~/.sparky/remote.env)
+# Custom setups:      cp .env.template .env and point the URLs at magi/shodan
 ```
 
 ### 3. Install services
@@ -91,7 +90,7 @@ and bot exactly as `app/launcher.py` does.
 │   └── src/ces_tutorial/
 │       ├── config.yml      # router/agent config; all LLM endpoints env-driven
 │       └── functions/      # router, router_agent, offline wiki tool
-├── deploy/                 # DGX Spark inference stack (compose, profiles)
+├── deploy/                 # two-Spark inference stack (compose + host envs)
 └── .env.template           # all endpoints/settings (no API keys)
 ```
 

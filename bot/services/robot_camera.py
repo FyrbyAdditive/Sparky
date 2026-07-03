@@ -4,7 +4,7 @@ Upstream used the browser webcam (via WebRTC) as the vision source. With the
 bot co-located with the robot, the robot's USB camera is the natural eye:
 this processor intercepts the UserImageRequestFrame that NATVisionLLMService
 sends upstream and answers it with a frame captured from the robot camera,
-so the browser never needs camera permission (VISION_SOURCE=robot).
+so the browser never needs camera permission.
 
 The camera itself is owned by services/camera_service.py (shared with the
 panel's live MJPEG stream behind one lock); this processor only turns a

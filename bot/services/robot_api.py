@@ -208,8 +208,12 @@ def _build_app() -> FastAPI:
                     targets[role] = base.removesuffix("/v1") + "/health"
             kokoro = os.getenv("KOKORO_BASE_URL", "http://localhost:8880/v1").removesuffix("/v1")
             targets["tts"] = f"{kokoro}/v1/models"
-            riva_host = os.getenv("RIVA_SERVER", "localhost:50051").split(":")[0]
-            targets["stt"] = f"http://{riva_host}:9000/v1/health/ready"
+            riva = os.getenv("RIVA_SERVER", "localhost:50051")
+            riva_host = riva.split(":")[0]
+            # health port tracks the ASR actually in use: Parakeet NIM on
+            # gRPC :50051 fronts health on :9000, Nemotron on :50052 -> :9001
+            riva_http = "9001" if riva.endswith(":50052") else "9000"
+            targets["stt"] = f"http://{riva_host}:{riva_http}/v1/health/ready"
             wiki = os.getenv("WIKI_BASE_URL")
             if wiki:
                 targets["wiki"] = f"{wiki.rstrip('/')}/health"

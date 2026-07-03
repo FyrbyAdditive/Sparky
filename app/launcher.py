@@ -79,7 +79,6 @@ def wizard():
     checks = [
         ("Riva STT", tcp_ok(audio_host, 50051)),
         ("Kokoro TTS", http_ok(f"http://{audio_host}:8880/v1/models")),
-        ("Router LLM", http_ok(f"http://{audio_host}:8030/health")),
         ("Agent LLM", http_ok(f"http://{llm_host}:8010/health")),
         ("Wikipedia", http_ok(f"http://{llm_host}:8040/health")),
     ]

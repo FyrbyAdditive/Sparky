@@ -174,8 +174,8 @@ def main():
          os.getenv("AGENT_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")),
         ("chitchat", os.getenv("CHITCHAT_LLM_BASE_URL", "http://localhost:8010/v1"),
          os.getenv("CHITCHAT_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")),
-        ("router", os.getenv("ROUTER_LLM_BASE_URL", "http://localhost:8030/v1"),
-         os.getenv("ROUTER_LLM_MODEL", "microsoft/Phi-3-mini-128k-instruct")),
+        ("router", os.getenv("ROUTER_LLM_BASE_URL", "http://localhost:8010/v1"),
+         os.getenv("ROUTER_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")),
         ("vision", os.getenv("VISION_LLM_BASE_URL", "http://localhost:8010/v1"),
          os.getenv("VISION_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")),
     ]

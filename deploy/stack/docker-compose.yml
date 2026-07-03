@@ -1,9 +1,10 @@
 # Sparky two-Spark stack — one compose, host-selected via COMPOSE_PROFILES
 # (see ../profiles/magi.env and ../profiles/shodan.env):
-#   magi   = init-volumes, nemotron-asr, kokoro-tts, vllm-router, tls-proxy
+#   magi   = init-volumes, nemotron-asr, kokoro-tts, tls-proxy
 #            (audio host + the robot's home)
-#   shodan = vllm-agent (Qwen3.6-35B multimodal: agent/chitchat/vision),
-#            wiki-offline (full Wikipedia index)
+#   shodan = vllm-agent (Qwen3.6-35B multimodal: agent/chitchat/vision AND
+#            intent routing — prefix caching makes the constant router
+#            prompt nearly free), wiki-offline (full Wikipedia index)
 # Project name pinned so volumes/containers are stable across checkouts.
 name: sparky
 
@@ -40,37 +41,6 @@ services:
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
       - VLLM_MARLIN_USE_ATOMIC_ADD=${VLLM_MARLIN_USE_ATOMIC_ADD:-0}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
-      start_period: 2h
-      start_interval: 10s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
-
-  vllm-router:
-    restart: unless-stopped
-    profiles: [ "magi" ]
-    container_name: vllm-router
-    image: ${VLLM_IMAGE:-nvcr.io/nvidia/vllm:26.05-py3}
-    ipc: host
-    command: >
-      vllm serve ${ROUTER_MODEL:-microsoft/Phi-3-mini-128k-instruct}
-      --host 0.0.0.0 --port 8000
-      --trust-remote-code
-      --max-model-len ${ROUTER_MAX_MODEL_LEN:-8192}
-      --gpu-memory-utilization ${ROUTER_GPU_FRACTION:-0.14}
-      ${ROUTER_EXTRA_ARGS:-}
-    ports:
-      - "8030:8000"
-    volumes:
-      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
-    environment:
-      - HF_TOKEN=${HF_TOKEN:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       start_period: 2h

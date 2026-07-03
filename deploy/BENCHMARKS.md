@@ -144,3 +144,18 @@ Note: tok/s now counted from usage.completion_tokens (chunk counting undercounts
 under MTP), so rates are not directly comparable to pre-July-3 rows.
 Movement requests now bypass the router LLM entirely (deterministic pre-route),
 removing ~130ms+ from action-turn latency.
+
+## 2026-07-03 — router tier eliminated; shodan memory relief
+
+Routing battery (20 prompts, accept-sets; median full-response latency):
+| candidate | score | median |
+|---|---|---|
+| phi-3-mini (dedicated magi container) | 14/20 | 659ms |
+| Nemotron-3-Nano-30B FP8 (dedicated magi container) | 17/20 | 532ms |
+| **Qwen3.6-35B NVFP4 on shodan's existing engine** | **19/20** | **303ms (over WiFi)** |
+
+Routing now runs on shodan's engine (prefix caching absorbs the constant
+router prompt); the dedicated router container is gone and magi runs no
+LLM at all (101GB available). Shodan engine trimmed: fraction 0.38,
+seqs 3, batched-tokens 4096 → engine 100GB→80GB, swap zero, and agent
+TTFT improved to 150ms / 61.6 tok/s.

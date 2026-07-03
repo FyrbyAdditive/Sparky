@@ -323,6 +323,12 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         self._last_frame_at = 0.0
         self._last_device_write = 0.0
         self._flusher_task = None
+        self._idle_pauser_task = None
+        # serializes stream mutation (writes, stop, reopen) across the three
+        # coroutines that touch _out_stream; the pending-append path in
+        # write_audio_frame deliberately stays lock-free so frames keep
+        # buffering during an in-flight flush
+        self._stream_lock: asyncio.Lock | None = None
 
     async def start(self, frame: StartFrame):
         await super(LocalAudioOutputTransport, self).start(frame)
@@ -339,48 +345,70 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         )
         self._out_stream.start_stream()
         await self.set_transport_ready(frame)
+        if self._stream_lock is None:
+            self._stream_lock = asyncio.Lock()
         if self._flusher_task is None:
             self._flusher_task = self.create_task(self._pending_flusher())
-            self.create_task(self._idle_pauser())
+        if self._idle_pauser_task is None:
+            self._idle_pauser_task = self.create_task(self._idle_pauser())
+
+    async def cleanup(self):
+        # FrameProcessor.cleanup does not cancel arbitrary created tasks;
+        # without this, restarts accumulate orphaned flusher/pauser loops
+        # poking a reopened stream (observed: 2 idle-pausers after one
+        # restart — the pauser handle used to be discarded)
+        for attr in ("_flusher_task", "_idle_pauser_task"):
+            task = getattr(self, attr)
+            if task is not None:
+                await self.cancel_task(task)
+                setattr(self, attr, None)
+        await super().cleanup()
 
     def _preroll_bytes(self) -> int:
         return int(2 * self._preroll_secs * (self._sample_rate or 24000))
 
     async def _device_write(self, data: bytes) -> bool:
-        if not self._out_stream:
-            return False
-        self._last_device_write = time.monotonic()
-        try:
-            if not self._out_stream.is_active():
-                await self.get_event_loop().run_in_executor(self._executor, self._out_stream.start_stream)
-            await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
-            return True
-        except Exception as e:
-            AUDIO_STATS["out_write_errors"] += 1
-            logger.warning(f"DeepBufferedOutput: write failed ({e}), reopening stream")
-            AUDIO_STATS["out_reopens"] += 1
+        if self._stream_lock is None:
+            self._stream_lock = asyncio.Lock()
+        # one writer at a time: the pending flusher, write_audio_frame and
+        # the idle pauser otherwise interleave stream restarts/writes at
+        # utterance boundaries (out-of-order audio) and can stop a stream
+        # mid-reopen
+        async with self._stream_lock:
+            if not self._out_stream:
+                return False
+            self._last_device_write = time.monotonic()
             try:
-                old = self._out_stream
-                self._out_stream = None
-                try:
-                    if old:
-                        old.close()
-                except Exception:
-                    pass
-                self._out_stream = self._py_audio.open(
-                    format=self._py_audio.get_format_from_width(2),
-                    channels=self._params.audio_out_channels,
-                    rate=self._sample_rate,
-                    frames_per_buffer=int(self._sample_rate / 10),
-                    output=True,
-                    output_device_index=self._params.output_device_index,
-                )
-                self._out_stream.start_stream()
+                if not self._out_stream.is_active():
+                    await self.get_event_loop().run_in_executor(self._executor, self._out_stream.start_stream)
                 await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
                 return True
-            except Exception as e2:
-                logger.error(f"DeepBufferedOutput: reopen failed: {e2}")
-                return False
+            except Exception as e:
+                AUDIO_STATS["out_write_errors"] += 1
+                logger.warning(f"DeepBufferedOutput: write failed ({e}), reopening stream")
+                AUDIO_STATS["out_reopens"] += 1
+                try:
+                    old = self._out_stream
+                    self._out_stream = None
+                    try:
+                        if old:
+                            old.close()
+                    except Exception:
+                        pass
+                    self._out_stream = self._py_audio.open(
+                        format=self._py_audio.get_format_from_width(2),
+                        channels=self._params.audio_out_channels,
+                        rate=self._sample_rate,
+                        frames_per_buffer=int(self._sample_rate / 10),
+                        output=True,
+                        output_device_index=self._params.output_device_index,
+                    )
+                    self._out_stream.start_stream()
+                    await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
+                    return True
+                except Exception as e2:
+                    logger.error(f"DeepBufferedOutput: reopen failed: {e2}")
+                    return False
 
     async def _flush_pending(self) -> bool:
         if not self._pending:
@@ -422,11 +450,20 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
             if (self._out_stream and self._out_stream.is_active()
                     and not self._pending
                     and (time.monotonic() - self._last_device_write) > 1.0):
-                try:
-                    await self.get_event_loop().run_in_executor(
-                        self._executor, self._out_stream.stop_stream)
-                except Exception:
-                    pass
+                if self._stream_lock is None:
+                    continue
+                async with self._stream_lock:
+                    # re-check under the lock: a write may have restarted
+                    # the stream while we waited
+                    if not (self._out_stream and self._out_stream.is_active()
+                            and not self._pending
+                            and (time.monotonic() - self._last_device_write) > 1.0):
+                        continue
+                    try:
+                        await self.get_event_loop().run_in_executor(
+                            self._executor, self._out_stream.stop_stream)
+                    except Exception:
+                        pass
 
 
 class DeepBufferedLocalAudioTransport(LocalAudioTransport):

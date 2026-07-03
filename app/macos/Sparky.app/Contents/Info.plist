@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Sparky</string>
+    <key>CFBundleDisplayName</key>
+    <string>Sparky</string>
+    <key>CFBundleIdentifier</key>
+    <string>net.fyrby.sparky</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>sparky</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Sparky relays the robot's microphone to local speech recognition.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Sparky uses the robot's camera so the assistant can see.</string>
+</dict>
+</plist>

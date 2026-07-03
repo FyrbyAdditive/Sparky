@@ -63,35 +63,12 @@ cp .env.template .env
 
 ## Running the System
 
-Three terminals on the bot host:
-
-### Terminal 1: Reachy Mini Daemon
-
-```bash
-cd bot
-# macOS simulation:
-uv run mjpython -m reachy_mini.daemon.app.main --sim --no-localhost-only
-# Linux simulation:
-uv run -m reachy_mini.daemon.app.main --sim --no-localhost-only
-# Real robot (USB): drop --sim, and set REACHY_USE_SIM=false in .env
-```
-
-### Terminal 2: Bot Service
-
-```bash
-cd bot
-uv run --env-file ../.env python main.py
-```
-
-### Terminal 3: NeMo Agent Service
-
-```bash
-cd nat
-uv run --env-file ../.env nat serve --config_file src/ces_tutorial/config.yml --port 8001
-```
-
-Then open the WebRTC UI printed by the bot service (default `http://localhost:7860`),
-allow mic/camera, and talk to the robot.
+On a Spark robot host the trio runs under systemd (`deploy/systemd/`):
+`reachy-daemon`, `sparky-nat`, `sparky-bot` — the robot greets on start and
+the control panel is at `https://<host>/` (typed chat, transcript,
+animations, volume, status). On a remote Mac/Linux machine, use the
+launcher app below. Manual equivalent (any host): start the daemon, NAT
+and bot exactly as `app/launcher.py` does.
 
 ## How It Works
 
@@ -118,6 +95,22 @@ allow mic/camera, and talk to the robot.
 └── .env.template           # all endpoints/settings (no API keys)
 ```
 
+## Remote client (macOS / Linux)
+
+Plug the robot into any Mac or Linux machine on the same network as the
+Sparks — the machine relays robot I/O while the Sparks do all inference:
+
+```bash
+./app/install.sh          # one time: deps + envs + click launcher
+# then double-click Sparky.app (macOS) or the Sparky desktop entry (Linux)
+```
+
+First launch runs a short wizard (which Spark hosts speech / LLM), probes
+the endpoints, and offers to pause the Spark-side bot over SSH (restored
+on quit). The control panel opens at `http://localhost:7861`. Logs live in
+`~/.sparky/`. Notes: macOS asks for microphone permission on first run;
+streaming STT prefers wired or strong WiFi.
+
 ## Troubleshooting
 
 - **macOS sim: `mjpython` fails with `Library not loaded: libpython3.13.dylib`**
@@ -129,7 +122,7 @@ allow mic/camera, and talk to the robot.
 - **Robot connection**: start the daemon before the bot service; the bot retries and
   will run without the robot if unavailable. `REACHY_USE_SIM` must match how the
   daemon was started
-- **Port conflicts**: NAT uses 8001; the WebRTC UI uses 7860
+- **Port conflicts**: NAT uses 8001; the panel/robot API uses 7861; daemon 8000
 
 ## Upstream & Attribution
 

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Sparky
+Comment=Reachy Mini voice assistant (remote client)
+Exec=bash -c 'export PATH="$HOME/.local/bin:$PATH"; cd @REPO@ && uv run --project bot python app/launcher.py'
+Terminal=true
+Categories=Utility;

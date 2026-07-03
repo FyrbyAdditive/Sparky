@@ -50,7 +50,8 @@ def bench_llm(name: str, base_url: str, model: str) -> dict | None:
                     if not line.startswith("data:") or line.strip() == "data: [DONE]":
                         continue
                     chunk = json.loads(line[5:])
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    # the final usage chunk has an EMPTY choices list
+                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
                     if delta.get("content"):
                         if ttft is None:
                             ttft = time.perf_counter() - t0

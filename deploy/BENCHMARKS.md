@@ -121,3 +121,22 @@ buffering rides it out. If variable stutter ever returns, move Kokoro to
 the inference host (costs ~1ms over the link).
 Process lesson: hash-verify every deploy (a --relative rsync silently
 left main.py stale; three "staged tests" ran phantom configurations).
+
+## 2026-07-03 — perf batches 1-3 (remote-client Mac + duo split), post speaker-diarization
+
+Measured from the Mac bot host over LAN (magi=ASR/TTS/router, shodan=agent+wiki),
+with diarization enabled and the robot session live.
+
+| role | model | TTFT/TTFA | rate |
+|---|---|---|---|
+| agent | RedHatAI/Qwen3.6-35B-A3B-NVFP4 | 172ms | 41.4 tok/s (usage-corrected under MTP) |
+| router | microsoft/Phi-3-mini-128k-instruct | 130ms | 17.1 tok/s |
+| tts | kokoro | TTFA 402ms | total 0.43s |
+
+Estimated voice-turn latency (speech end -> first audio): ~0.85s.
+Bot idle CPU on the Mac: ~10.8% -> ~8.5% after the motion-loop idle fast path
+(secondary-pose short-circuit + listening-idle pose cache + snapshot throttle).
+Note: tok/s now counted from usage.completion_tokens (chunk counting undercounts
+under MTP), so rates are not directly comparable to pre-July-3 rows.
+Movement requests now bypass the router LLM entirely (deterministic pre-route),
+removing ~130ms+ from action-turn latency.

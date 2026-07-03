@@ -230,6 +230,7 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         await self.set_transport_ready(frame)
         if self._flusher_task is None:
             self._flusher_task = self.create_task(self._pending_flusher())
+            self.create_task(self._silence_feeder())
 
     def _preroll_bytes(self) -> int:
         return int(2 * self._preroll_secs * (self._sample_rate or 24000))
@@ -238,8 +239,35 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
         if not self._out_stream:
             return False
         self._last_device_write = time.monotonic()
-        await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
-        return True
+        try:
+            await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
+            return True
+        except Exception as e:
+            AUDIO_STATS["out_write_errors"] += 1
+            logger.warning(f"DeepBufferedOutput: write failed ({e}), reopening stream")
+            AUDIO_STATS["out_reopens"] += 1
+            try:
+                old = self._out_stream
+                self._out_stream = None
+                try:
+                    if old:
+                        old.close()
+                except Exception:
+                    pass
+                self._out_stream = self._py_audio.open(
+                    format=self._py_audio.get_format_from_width(2),
+                    channels=self._params.audio_out_channels,
+                    rate=self._sample_rate,
+                    frames_per_buffer=int(self._sample_rate / 10),
+                    output=True,
+                    output_device_index=self._params.output_device_index,
+                )
+                self._out_stream.start_stream()
+                await self.get_event_loop().run_in_executor(self._executor, self._out_stream.write, data)
+                return True
+            except Exception as e2:
+                logger.error(f"DeepBufferedOutput: reopen failed: {e2}")
+                return False
 
     async def _flush_pending(self) -> bool:
         if not self._pending:
@@ -270,6 +298,21 @@ class DeepBufferedOutput(LocalAudioOutputTransport):
             return True
 
         return await self._device_write(frame.audio)
+
+    async def _silence_feeder(self):
+        """An open-but-idle stream underruns; through the pipewire ALSA plugin
+        that replays stale buffer fragments as periodic noise bursts. Keep the
+        stream fed with silence whenever no real audio flowed recently."""
+        chunk_secs = 0.08
+        while True:
+            await asyncio.sleep(chunk_secs / 2)
+            if (self._out_stream and not self._pending
+                    and (time.monotonic() - self._last_device_write) > chunk_secs):
+                silence = b"\x00" * int(2 * chunk_secs * (self._sample_rate or 24000))
+                try:
+                    await self._device_write(silence)
+                except Exception:
+                    pass
 
 
 class DeepBufferedLocalAudioTransport(LocalAudioTransport):

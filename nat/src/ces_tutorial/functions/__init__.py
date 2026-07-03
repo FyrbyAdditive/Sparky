@@ -7,6 +7,10 @@ from ces_tutorial.functions.robot_tools import (
     robot_look_at_fn,
     robot_remember_speaker_name_fn,
 )
+from ces_tutorial.functions.web_search import (
+    web_search_fn,
+    web_read_page_fn,
+)
 
 __all__ = [
     "router_fn",
@@ -15,4 +19,6 @@ __all__ = [
     "robot_play_animation_fn",
     "robot_look_at_fn",
     "robot_remember_speaker_name_fn",
+    "web_search_fn",
+    "web_read_page_fn",
 ]

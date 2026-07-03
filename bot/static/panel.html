@@ -175,6 +175,10 @@
   .spkRow button { font-size: 12px; padding: 4px 10px; }
   .spkEmpty { color: var(--dim); font-size: 13px; padding: 2px 1px; }
 
+  #toolList { display: flex; flex-direction: column; gap: 6px; }
+  .toolRow input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; flex: none; }
+  .toolRow .desc { color: var(--dim); font-size: 12px; font-weight: 400; }
+
   #services { display: flex; flex-wrap: wrap; gap: 6px; }
   #models { font-size: 12px; color: var(--dim); margin-top: 10px; word-break: break-all; line-height: 1.6; }
 
@@ -240,6 +244,10 @@
     <details class="sec" id="sec-speakers">
       <summary>Speakers</summary>
       <div class="secBody"><div id="speakerList"></div></div>
+    </details>
+    <details class="sec" id="sec-tools">
+      <summary>Tools</summary>
+      <div class="secBody"><div id="toolList"></div></div>
     </details>
     <details class="sec" id="sec-services">
       <summary>Services</summary>
@@ -422,6 +430,40 @@ function syncSpeakers(speakers) {
   });
 }
 
+/* ---------- optional tools (agent capabilities, toggled server-side) ---------- */
+function syncTools(tools) {
+  const list = $('toolList');
+  if (document.activeElement && list.contains(document.activeElement)) return;
+  list.innerHTML = '';
+  const entries = Object.entries(tools || {});
+  if (!entries.length) {
+    const d = document.createElement('div');
+    d.className = 'spkEmpty';
+    d.textContent = 'No optional tools available.';
+    list.appendChild(d);
+    return;
+  }
+  entries.forEach(([name, t]) => {
+    const row = document.createElement('div');
+    row.className = 'spkRow toolRow';
+    const label = document.createElement('span');
+    label.innerHTML = '<span class="name"></span><br><span class="desc"></span>';
+    label.querySelector('.name').textContent = t.label || name;
+    label.querySelector('.desc').textContent = t.description || '';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!t.enabled;
+    cb.title = 'Takes effect on the next question — no restart needed';
+    cb.onchange = async () => {
+      const r = await post('/tools', {name, enabled: cb.checked});
+      if (r.tools) syncTools(r.tools); else cb.checked = !cb.checked;
+    };
+    row.appendChild(label);
+    row.appendChild(cb);
+    list.appendChild(row);
+  });
+}
+
 /* ---------- animations ---------- */
 async function loadAnimations() {
   const r = await fetch('robot/animations').then(r => r.json());
@@ -462,6 +504,7 @@ async function refreshStatus() {
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     syncCamera(s.camera);
     syncSpeakers(s.speakers);
+    syncTools(s.tools);
     if (s.muted !== muted) setMuted(s.muted);
   } catch (e) { /* panel keeps trying */ }
 }

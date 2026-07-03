@@ -44,6 +44,54 @@ _ws_queues: set = set()
 # same pattern as _session).
 _speaker_names: dict[int, str] = {}
 
+# Optional-tools registry: capabilities the NAT agent may use only when
+# switched on in the panel. The catalog is code-seeded here (labels and
+# descriptions never go stale in a state file); only the enabled bits
+# persist in ~/.sparky/tools.json. NAT tools GET /tools before acting and
+# fail closed, so a toggle applies to the very next agent turn with no
+# restarts. Adding a future optional tool = one entry here + a gated NAT
+# function + config.yml wiring. Only ever touched from the API server's
+# event loop (NAT reads over HTTP; the pipeline never reads it), so no
+# cross-thread concern.
+_TOOLS_FILE = Path.home() / ".sparky" / "tools.json"
+OPTIONAL_TOOLS: dict[str, dict] = {
+    "web_search": {
+        "label": "Web search (DuckDuckGo)",
+        "description": "Let the assistant search the live internet and read web pages.",
+        "enabled": os.getenv("WEB_SEARCH_ENABLED", "0").strip() == "1",
+    },
+}
+
+
+def _load_tool_states():
+    """Overlay persisted enabled-bits onto the code-seeded catalog.
+    Missing/corrupt file must never break the bot."""
+    try:
+        import json
+
+        saved = json.loads(_TOOLS_FILE.read_text())
+        for name, enabled in saved.items():
+            if name in OPTIONAL_TOOLS and isinstance(enabled, bool):
+                OPTIONAL_TOOLS[name]["enabled"] = enabled
+    except Exception:
+        pass
+
+
+def _save_tool_states():
+    try:
+        import json
+
+        _TOOLS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _TOOLS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(
+            {n: t["enabled"] for n, t in OPTIONAL_TOOLS.items()}, indent=1))
+        os.replace(tmp, _TOOLS_FILE)
+    except Exception as e:
+        logger.warning(f"tools registry: could not persist state: {e}")
+
+
+_load_tool_states()
+
 
 def get_speaker_name(tag: int) -> str | None:
     """Known name for a 0-based diarization speaker tag, else None."""
@@ -192,6 +240,11 @@ class SpeakerNameRequest(BaseModel):
     name: str = ""
 
 
+class OptionalToolRequest(BaseModel):
+    name: str
+    enabled: bool
+
+
 class CameraRequest(BaseModel):
     resolution: str
 
@@ -329,6 +382,7 @@ def _build_app() -> FastAPI:
             "audio": audio,
             "session_active": _session["task"] is not None,
             "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
+            "tools": OPTIONAL_TOOLS,
             "camera": _camera_state(),
             "models": {
                 "agent": os.getenv("AGENT_LLM_MODEL", "?"),
@@ -395,6 +449,20 @@ def _build_app() -> FastAPI:
                                  media_type="multipart/x-mixed-replace; boundary=frame")
 
     # --- speaker registry (diarization) ---
+
+    @app.get("/tools")
+    def tools():
+        return {"ok": True, "tools": OPTIONAL_TOOLS}
+
+    @app.post("/tools")
+    def set_tool(req: OptionalToolRequest):
+        if req.name not in OPTIONAL_TOOLS:
+            return {"ok": False, "error": "unknown_tool"}
+        OPTIONAL_TOOLS[req.name]["enabled"] = req.enabled
+        _save_tool_states()
+        logger.info(f"Optional tool '{req.name}' "
+                    f"{'enabled' if req.enabled else 'disabled'}")
+        return {"ok": True, "tools": OPTIONAL_TOOLS}
 
     @app.get("/speakers")
     def speakers():

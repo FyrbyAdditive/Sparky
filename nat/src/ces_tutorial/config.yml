@@ -27,11 +27,23 @@ functions:
       _type: robot_remember_speaker_name
       base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
 
+   # optional tools: gated at call time by the robot API's registry
+   # (panel > Tools); disabled/unreachable -> polite refusal, never online
+   web_search:
+      _type: web_search_duckduckgo
+      robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+      max_results: 5
+
+   read_web_page:
+      _type: web_read_page
+      robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+      max_chars: 6000
+
    router:
       _type: router
       route_config:
         - name: other
-          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes ANY request involving a physical action or gesture, even mixed with a question or other request, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep, nod while answering. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is.
+          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes ANY request involving a physical action or gesture, even mixed with a question or other request, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep, nod while answering. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is. Also includes questions about current events, news, weather, sports scores, prices, or anything needing an internet search or reading a web page.
         - name: chit_chat
           description: Any simple chit chat, small talk, or casual conversation.
         - name: image_understanding
@@ -45,10 +57,10 @@ functions:
       llm_name: agent_llm
       verbose: true
       parse_agent_response_max_retries: 3
-      tool_names: [wikipedia_search, play_animation, look_at, remember_speaker_name]
+      tool_names: [wikipedia_search, play_animation, look_at, remember_speaker_name, web_search, read_web_page]
       # Images are redacted on this route (a separate vision route sees them);
       # without this the model tells users it has no camera.
-      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body.
+      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body. For factual or encyclopedic lookups prefer wikipedia_search (offline); use web_search only for current events, news, weather, prices, or anything needing the live internet, and read_web_page to open a promising result URL.
 
 # All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
 # model names come from the environment so model profiles can swap them

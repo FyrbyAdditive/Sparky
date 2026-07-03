@@ -5,48 +5,180 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparky Control</title>
 <style>
-  :root { --bg:#0f1216; --card:#181d24; --line:#2a323d; --text:#e6ebf0; --dim:#8a97a5;
-          --accent:#4da3ff; --ok:#3ecf8e; --bad:#ff6b6b; }
-  * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,sans-serif;
-         display:flex; flex-direction:column; height:100vh; }
-  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
-           border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  header h1 { font-size:16px; font-weight:600; margin-right:8px; }
-  .chip { font-size:12px; padding:3px 9px; border-radius:99px; background:var(--card);
-          border:1px solid var(--line); color:var(--dim); }
-  .chip.ok { color:var(--ok); border-color:var(--ok); }
-  .chip.bad { color:var(--bad); border-color:var(--bad); }
-  main { display:flex; flex:1; min-height:0; }
-  #left { flex:2; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--line); }
-  #transcript { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
-  .msg { max-width:82%; padding:8px 12px; border-radius:12px; white-space:pre-wrap; word-wrap:break-word; }
-  .msg.user { align-self:flex-end; background:#1d3a5f; }
-  .msg.assistant { align-self:flex-start; background:var(--card); }
-  .msg .who { font-size:11px; color:var(--dim); margin-bottom:2px; }
-  #inputs { padding:12px 16px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
-  .row { display:flex; gap:8px; }
-  input[type=text] { flex:1; background:var(--card); border:1px solid var(--line); color:var(--text);
-          border-radius:8px; padding:9px 12px; font-size:15px; }
-  input[type=text]:focus { outline:none; border-color:var(--accent); }
-  button { background:var(--card); border:1px solid var(--line); color:var(--text); border-radius:8px;
-           padding:8px 14px; font-size:14px; cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#08111c; font-weight:600; }
-  #right { flex:1; min-width:280px; max-width:380px; overflow-y:auto; padding:16px; display:flex;
-           flex-direction:column; gap:16px; }
-  section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:8px; }
-  #anims { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:6px; }
-  #anims button { font-size:12.5px; padding:7px 4px; }
-  #dpad { display:grid; grid-template-columns:repeat(3,52px); grid-template-rows:repeat(3,40px); gap:6px;
-          justify-content:center; }
-  #dpad button { padding:0; }
-  #dpad .blank { visibility:hidden; }
-  #muteBtn.muted { background:var(--bad); border-color:var(--bad); color:#fff; }
-  #muteBanner { display:none; background:var(--bad); color:#fff; font-weight:700;
-                padding:10px 16px; text-align:center; cursor:pointer; }
-  #services { display:flex; flex-wrap:wrap; gap:6px; }
-  #models { font-size:12px; color:var(--dim); margin-top:6px; word-break:break-all; }
+  :root {
+    --bg: #0b0e13;
+    --bg-soft: #11151d;
+    --card: #171c26;
+    --card-hover: #1d2330;
+    --line: #262e3d;
+    --line-soft: #1e2532;
+    --text: #e8edf4;
+    --dim: #8b98a9;
+    --accent: #4da3ff;
+    --accent-soft: rgba(77, 163, 255, 0.14);
+    --ok: #3ecf8e;
+    --bad: #ff5c5c;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 4px 14px rgba(0,0,0,.22);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1100px 500px at 85% -10%, rgba(77,163,255,.07), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
+  ::-webkit-scrollbar-thumb:hover { background: #33405a; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(13, 17, 24, 0.82);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    position: sticky; top: 0; z-index: 10;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; font-weight: 650; letter-spacing: .01em; margin-right: 4px; }
+  .chip {
+    font-size: 12px; padding: 3px 10px; border-radius: 99px;
+    background: var(--card); border: 1px solid var(--line); color: var(--dim);
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .chip.ok  { color: var(--ok);  border-color: rgba(62,207,142,.45); }
+  .chip.bad { color: var(--bad); border-color: rgba(255,92,92,.45); }
+  #headerRight { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  button {
+    background: var(--card); border: 1px solid var(--line); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 14px; font-size: 14px;
+    font-family: inherit; cursor: pointer;
+    transition: background .15s, border-color .15s, transform .05s;
+  }
+  button:hover { border-color: var(--accent); background: var(--card-hover); }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #08111c; font-weight: 620; }
+  button.primary:hover { filter: brightness(1.08); }
+  #estopBtn { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 750; }
+  #estopBtn:hover { filter: brightness(1.1); border-color: var(--bad); }
+  #muteBtn.muted { background: var(--bad); border-color: var(--bad); color: #fff; }
+
+  #volWrap { display: none; align-items: center; gap: 8px; }
+  #volWrap.show { display: flex; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 130px; height: 4px; border-radius: 4px;
+    background: var(--line); outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: none; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    transition: transform .1s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  #volLabel { min-width: 42px; text-align: right; }
+
+  #muteBanner {
+    display: none; background: var(--bad); color: #fff; font-weight: 700;
+    padding: 10px 16px; text-align: center; cursor: pointer;
+  }
+
+  main { display: flex; flex: 1; min-height: 0; }
+  #left { flex: 2; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line-soft); }
+  #transcript { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .msg {
+    max-width: 78%; padding: 9px 13px; border-radius: 14px;
+    white-space: pre-wrap; word-wrap: break-word;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25);
+    animation: msgIn .18s ease-out;
+  }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .msg.user { align-self: flex-end; background: #1c3a5f; border-bottom-right-radius: 5px; }
+  .msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line-soft); border-bottom-left-radius: 5px; }
+  .msg .who { font-size: 11px; color: var(--dim); margin-bottom: 3px; font-weight: 600; letter-spacing: .03em; }
+
+  #inputs { padding: 12px 18px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 8px; background: var(--bg-soft); }
+  .row { display: flex; gap: 8px; }
+  input[type=text] {
+    flex: 1; background: var(--card); border: 1px solid var(--line); color: var(--text);
+    border-radius: var(--radius-sm); padding: 9px 13px; font-size: 15px; font-family: inherit;
+    transition: border-color .15s;
+  }
+  input[type=text]::placeholder { color: #5d6b7e; }
+  input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  #right { flex: 1; min-width: 300px; max-width: 400px; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  details.sec {
+    background: var(--card); border: 1px solid var(--line-soft);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  details.sec > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--dim);
+    transition: color .15s, background .15s;
+  }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary:hover { color: var(--text); background: var(--card-hover); }
+  details.sec > summary::before {
+    content: ""; width: 7px; height: 7px; flex: none;
+    border-right: 2px solid var(--dim); border-bottom: 2px solid var(--dim);
+    transform: rotate(-45deg); transition: transform .18s ease;
+    margin-right: 2px;
+  }
+  details.sec[open] > summary::before { transform: rotate(45deg); }
+  .secBody { padding: 4px 14px 14px; }
+
+  #camFeed {
+    width: 100%; border-radius: var(--radius-sm); display: block;
+    background: #000; aspect-ratio: 4/3; object-fit: contain;
+    border: 1px solid var(--line-soft);
+  }
+  select {
+    width: 100%; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+    border-radius: var(--radius-sm); padding: 8px 10px; font-size: 14px; font-family: inherit;
+    margin-top: 10px; cursor: pointer;
+  }
+  select:focus { outline: none; border-color: var(--accent); }
+
+  #anims { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+  #anims button { font-size: 12.5px; padding: 7px 4px; background: var(--bg-soft); }
+  #dpad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 42px); gap: 6px; justify-content: center; }
+  #dpad button { padding: 0; background: var(--bg-soft); font-size: 15px; }
+  #dpad .blank { visibility: hidden; }
+
+  #speakerList { display: flex; flex-direction: column; gap: 6px; }
+  .spkRow {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--bg-soft); border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm); padding: 7px 11px; font-size: 13.5px;
+  }
+  .spkRow .name { font-weight: 600; }
+  .spkRow button { font-size: 12px; padding: 4px 10px; }
+  .spkEmpty { color: var(--dim); font-size: 13px; padding: 2px 1px; }
+
+  #services { display: flex; flex-wrap: wrap; gap: 6px; }
+  #models { font-size: 12px; color: var(--dim); margin-top: 10px; word-break: break-all; line-height: 1.6; }
+
+  @media (max-width: 820px) {
+    main { flex-direction: column; overflow-y: auto; }
+    #left { border-right: none; min-height: 55vh; }
+    #right { max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -54,8 +186,15 @@
   <h1>🤖 Sparky</h1>
   <span id="robotChip" class="chip">robot: …</span>
   <span id="sessionChip" class="chip">session: …</span>
-  <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
-  <button id="estopBtn" title="Emergency stop: halt motion, release motors, mute" style="background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700">■ STOP</button>
+  <div id="headerRight">
+    <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
+    <div id="volWrap" title="Robot speaker volume">
+      <span>🔊</span>
+      <input id="volume" type="range" min="0" max="120" step="5">
+      <span id="volLabel" class="chip">…</span>
+    </div>
+    <button id="estopBtn" title="Emergency stop: halt motion, release motors, mute">■ STOP</button>
+  </div>
 </header>
 <div id="muteBanner" title="Click to unmute">🔇 MIC MUTED — the robot cannot hear you. Click here to unmute.</div>
 <main>
@@ -73,42 +212,45 @@
     </div>
   </div>
   <div id="right">
-    <section>
-      <h2>Volume</h2>
-      <div class="row" style="align-items:center">
-        <input id="volume" type="range" min="0" max="120" step="5" style="flex:1">
-        <span id="volLabel" class="chip">…</span>
+    <details class="sec" id="sec-camera" open>
+      <summary>Camera</summary>
+      <div class="secBody">
+        <img id="camFeed" alt="camera feed">
+        <select id="camRes"></select>
       </div>
-    </section>
-    <section>
-      <h2>Look</h2>
-      <div id="dpad">
-        <span class="blank"></span><button onclick="look('up')">▲</button><span class="blank"></span>
-        <button onclick="look('left')">◀</button><button onclick="look('front')">●</button><button onclick="look('right')">▶</button>
-        <span class="blank"></span><button onclick="look('down')">▼</button><span class="blank"></span>
+    </details>
+    <details class="sec" id="sec-look" open>
+      <summary>Look</summary>
+      <div class="secBody">
+        <div id="dpad">
+          <span class="blank"></span><button onclick="look('up')">▲</button><span class="blank"></span>
+          <button onclick="look('left')">◀</button><button onclick="look('front')">●</button><button onclick="look('right')">▶</button>
+          <span class="blank"></span><button onclick="look('down')">▼</button><span class="blank"></span>
+        </div>
       </div>
-    </section>
-    <section>
-      <h2>Animations</h2>
-      <div id="anims"></div>
-    </section>
-    <section>
-      <h2>Camera</h2>
-      <div class="row" style="align-items:center">
-        <select id="camRes" style="flex:1;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font-size:14px"></select>
+    </details>
+    <details class="sec" id="sec-anims">
+      <summary>Animations</summary>
+      <div class="secBody"><div id="anims"></div></div>
+    </details>
+    <details class="sec" id="sec-speakers">
+      <summary>Speakers</summary>
+      <div class="secBody"><div id="speakerList"></div></div>
+    </details>
+    <details class="sec" id="sec-services">
+      <summary>Services</summary>
+      <div class="secBody">
+        <div id="services"></div>
+        <div id="models"></div>
       </div>
-    </section>
-    <section>
-      <h2>Services</h2>
-      <div id="services"></div>
-      <div id="models"></div>
-    </section>
+    </details>
   </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 let muted = false;
 
+/* ---------- transcript ---------- */
 function addMsg(item) {
   const div = document.createElement('div');
   div.className = 'msg ' + (item.role === 'user' ? 'user' : 'assistant');
@@ -131,6 +273,7 @@ async function renameSpeaker(label) {
   const name = prompt('Name for ' + label + ' (empty to forget):');
   if (name === null) return;
   await post('/speakers', {speaker: label, name: name.trim()});
+  refreshStatus();
 }
 
 function connectWS() {
@@ -167,9 +310,8 @@ function play(name) { post('/robot/play_animation', {name}); }
 
 $('chatText').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 $('speakText').addEventListener('keydown', e => { if (e.key === 'Enter') sendSpeak(); });
-// Mute state is server-authoritative: the UI only ever reflects what the
-// bot confirms. A blind local toggle desyncs across tabs/reloads and left
-// the robot silently deaf for half-hour stretches.
+
+/* ---------- mute (server-authoritative; see the silent-deafness incident) ---------- */
 function setMuted(m) {
   muted = !!m;
   $('muteBtn').textContent = muted ? '🔇 mic off' : '🎤 mic on';
@@ -188,12 +330,12 @@ $('estopBtn').onclick = async () => {
   setMuted(true);
 };
 $('muteBtn').onclick = () => {
-  $('muteBtn').blur();  // focused buttons re-click on Space/Enter — the
-                        // phantom-toggle that kept muting the robot
+  $('muteBtn').blur();  // focused buttons re-click on Space/Enter
   setMute(!muted);
 };
 $('muteBanner').onclick = () => setMute(false);
 
+/* ---------- volume (top bar; only shown when the backend supports it) ---------- */
 let volTimer = null;
 $('volume').addEventListener('input', e => {
   $('volLabel').textContent = e.target.value + '%';
@@ -203,8 +345,33 @@ $('volume').addEventListener('input', e => {
 async function loadVolume() {
   try {
     const v = await fetch('volume').then(r => r.json());
-    if (v.ok && v.percent !== null) { $('volume').value = v.percent; $('volLabel').textContent = v.percent + '%'; }
+    if (v.ok && v.percent !== null) {
+      $('volWrap').classList.add('show');
+      $('volume').value = v.percent;
+      $('volLabel').textContent = v.percent + '%';
+    }
   } catch (e) {}
+}
+
+/* ---------- collapsible sections (state persisted) ---------- */
+function initSections() {
+  document.querySelectorAll('details.sec').forEach(d => {
+    const saved = localStorage.getItem('sec:' + d.id);
+    if (saved !== null) d.open = saved === '1';
+    d.addEventListener('toggle', () => {
+      localStorage.setItem('sec:' + d.id, d.open ? '1' : '0');
+      if (d.id === 'sec-camera') syncCameraStream();
+    });
+  });
+}
+
+/* ---------- camera: live feed + resolution ---------- */
+function syncCameraStream() {
+  const img = $('camFeed');
+  const want = $('sec-camera').open && !document.hidden;
+  const streaming = !!img.getAttribute('src');
+  if (want && !streaming) img.src = 'camera/stream?t=' + Date.now();
+  else if (!want && streaming) img.removeAttribute('src');
 }
 
 let camResLoaded = false;
@@ -224,6 +391,34 @@ function syncCamera(cam) {
   if (document.activeElement !== sel) sel.value = cam.resolution;
 }
 
+/* ---------- speakers section ---------- */
+function syncSpeakers(speakers) {
+  const list = $('speakerList');
+  list.innerHTML = '';
+  const entries = Object.entries(speakers || {});
+  if (!entries.length) {
+    const d = document.createElement('div');
+    d.className = 'spkEmpty';
+    d.textContent = 'No named speakers yet — click a name on a transcript line, or people can just introduce themselves.';
+    list.appendChild(d);
+    return;
+  }
+  entries.forEach(([num, name]) => {
+    const row = document.createElement('div');
+    row.className = 'spkRow';
+    const label = document.createElement('span');
+    label.innerHTML = '<span class="name"></span> <span style="color:var(--dim)">· Speaker ' + num + '</span>';
+    label.querySelector('.name').textContent = name;
+    const btn = document.createElement('button');
+    btn.textContent = 'rename';
+    btn.onclick = () => renameSpeaker('Speaker ' + num);
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+/* ---------- animations ---------- */
 async function loadAnimations() {
   const r = await fetch('robot/animations').then(r => r.json());
   $('anims').innerHTML = '';
@@ -235,6 +430,7 @@ async function loadAnimations() {
   });
 }
 
+/* ---------- status ---------- */
 async function refreshStatus() {
   try {
     const s = await fetch('status').then(r => r.json());
@@ -255,23 +451,29 @@ async function refreshStatus() {
       c.className = 'chip ' + (micOk ? 'ok' : 'bad');
       c.textContent = micOk ? 'mic-flow' : 'mic-stalled ' + s.audio.mic_frame_age_secs + 's';
       c.title = 'reopens: mic ' + s.audio.mic_reopens + ', out ' + s.audio.out_reopens +
-                ', write errors ' + s.audio.out_write_errors;
+                ', write errors ' + s.audio.out_write_errors +
+                ', helper overflows ' + (s.audio.mic_helper_overflows ?? '–');
       sv.appendChild(c);
     }
     $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     syncCamera(s.camera);
+    syncSpeakers(s.speakers);
     if (s.muted !== muted) setMuted(s.muted);
   } catch (e) { /* panel keeps trying */ }
 }
 
 connectWS();
+initSections();
 loadAnimations();
 loadVolume();
 refreshStatus();
+syncCameraStream();
 setInterval(refreshStatus, 10000);
-// stale tabs are how the mute state went missing — resync on focus
+// stale tabs are how the mute state went missing — resync on focus;
+// also pause/resume the camera stream with tab visibility
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refreshStatus();
+  syncCameraStream();
 });
 </script>
 </body>

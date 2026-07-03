@@ -1,4 +1,5 @@
 import logging
+import re
 
 from pydantic import Field
 
@@ -10,6 +11,25 @@ from nat.data_models.function import FunctionBaseConfig
 from nat.data_models.component_ref import LLMRef, FunctionRef
 
 logger = logging.getLogger(__name__)
+
+_REACT_NOISE = re.compile(
+    r"^(?:Thought|Action|Action Input|Observation)\s*:.*$", re.MULTILINE)
+_REACT_PARSE_ERR = re.compile(
+    r"Parsing LLM output produced both a final answer and a parse-able action::?")
+
+
+def _clean_agent_reply(content: str) -> str:
+    """Everything the agent returns is SPOKEN — a ReAct parse hiccup once
+    put 'Thought:/Action:/Parsing LLM output...' through the robot's voice.
+    Keep only the part after the last Final Answer and drop scaffolding."""
+    if not content:
+        return content
+    if "Final Answer:" in content:
+        content = content.rsplit("Final Answer:", 1)[1]
+    content = _REACT_PARSE_ERR.sub("", content)
+    content = _REACT_NOISE.sub("", content)
+    content = content.strip()
+    return content or "Sorry, I lost my train of thought there. Could you ask again?"
 
 
 class RouterAgentConfig(FunctionBaseConfig, name="ces_tutorial_router_agent"):
@@ -252,6 +272,11 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
                     # Call the agent function with the dict
                     agent_response = await agent_function.ainvoke(agent_input)
                     logger.debug(f"RouterAgent: Agent response received: {type(agent_response)}")
+                    try:
+                        agent_response.choices[0].message.content = _clean_agent_reply(
+                            agent_response.choices[0].message.content)
+                    except (AttributeError, IndexError):
+                        pass
                     return agent_response
                     
                 except Exception as e:
@@ -312,7 +337,7 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
                 "model": chat_request.model if hasattr(chat_request, 'model') else "nemotron",
             }
             agent_response = await agent_function.ainvoke(agent_input)
-            content = agent_response.choices[0].message.content
+            content = _clean_agent_reply(agent_response.choices[0].message.content)
             yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="agent")
             yield ChatResponseChunk.create_streaming_chunk(None, model="agent", finish_reason="stop")
 

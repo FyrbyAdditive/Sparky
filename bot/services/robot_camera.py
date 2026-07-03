@@ -6,94 +6,31 @@ this processor intercepts the UserImageRequestFrame that NATVisionLLMService
 sends upstream and answers it with a frame captured from the robot camera,
 so the browser never needs camera permission (VISION_SOURCE=robot).
 
-Capture resolution is a runtime setting (panel: Camera section -> POST
-/camera). The vision model receives a <=256px image, so the 640x480 default
-is pixel-equivalent to full 1080p while avoiding a ~6MB convert+copy per
-request; higher options exist for when the source detail matters.
+The camera itself is owned by services/camera_service.py (shared with the
+panel's live MJPEG stream behind one lock); this processor only turns a
+grab into a pipecat frame.
 """
 
 import asyncio
-import os
 
 from loguru import logger
 
 from pipecat.frames.frames import Frame, UserImageRawFrame, UserImageRequestFrame
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
-CAMERA_RESOLUTIONS = ["320x240", "640x480", "1280x720", "1920x1080"]
+from . import camera_service
 
-# Shared with robot_api (same cross-thread pattern as the speaker registry):
-# the panel writes, the capture path reads and reopens on change.
-CAMERA = {"resolution": os.getenv("CAMERA_RESOLUTION", "640x480")}
-
-
-def _parse_resolution(value: str) -> tuple[int, int] | None:
-    try:
-        w, h = value.lower().split("x")
-        return int(w), int(h)
-    except (ValueError, AttributeError):
-        return None
+# Back-compat re-exports (robot_api and env docs referenced these here)
+CAMERA = camera_service.CAMERA
+CAMERA_RESOLUTIONS = camera_service.CAMERA_RESOLUTIONS
 
 
 class RobotCameraResponder(FrameProcessor):
-    def __init__(self, device_index: int | None = None):
-        super().__init__()
-        self._device_index = device_index if device_index is not None else int(os.getenv("ROBOT_CAMERA_INDEX", "0"))
-        self._capture = None
-        self._applied_resolution: str | None = None
-
-    def _open(self):
-        import cv2
-
-        wanted = CAMERA["resolution"]
-        if self._capture is not None and self._capture.isOpened():
-            if self._applied_resolution == wanted:
-                return True
-            # resolution changed from the panel: reopen with the new mode
-            self._capture.release()
-            self._capture = None
-        self._capture = cv2.VideoCapture(self._device_index)
-        if not self._capture.isOpened():
-            logger.warning(f"RobotCameraResponder: cannot open camera {self._device_index}")
-            self._capture = None
-            return False
-        parsed = _parse_resolution(wanted)
-        if parsed:
-            self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, parsed[0])
-            self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, parsed[1])
-        self._applied_resolution = wanted
-        return True
-
-    def _grab(self):
-        import cv2
-
-        if not self._open():
-            return None
-        # Drain a couple of stale frames so the answer reflects "now"
-        for _ in range(2):
-            self._capture.grab()
-        ok, frame_bgr = self._capture.read()
-        if not ok or frame_bgr is None:
-            logger.warning("RobotCameraResponder: capture failed, reopening next time")
-            self._capture.release()
-            self._capture = None
-            return None
-        # Drivers (AVFoundation especially) often ignore the requested mode
-        # and deliver native frames; downscale BEFORE the expensive
-        # convert+copy so the requested resolution is honored regardless.
-        wanted = _parse_resolution(CAMERA["resolution"])
-        h, w = frame_bgr.shape[:2]
-        if wanted and (w, h) != wanted and w > wanted[0]:
-            frame_bgr = cv2.resize(frame_bgr, wanted, interpolation=cv2.INTER_AREA)
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        h, w = frame_rgb.shape[:2]
-        return frame_rgb.tobytes(), (w, h)
-
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, UserImageRequestFrame) and direction == FrameDirection.UPSTREAM:
-            result = await asyncio.to_thread(self._grab)
+            result = await asyncio.to_thread(camera_service.grab_rgb)
             if result is not None:
                 image_bytes, size = result
                 logger.info(f"RobotCameraResponder: captured {size[0]}x{size[1]} robot camera frame")

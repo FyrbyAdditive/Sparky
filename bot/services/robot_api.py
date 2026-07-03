@@ -52,7 +52,7 @@ def get_speaker_name(tag: int) -> str | None:
 
 def _camera_state() -> dict:
     try:
-        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        from .camera_service import CAMERA, CAMERA_RESOLUTIONS
         return {"resolution": CAMERA["resolution"], "options": CAMERA_RESOLUTIONS}
     except Exception:
         return {}
@@ -326,24 +326,47 @@ def _build_app() -> FastAPI:
         finally:
             _ws_queues.discard(q)
 
-    # --- camera capture settings ---
+    # --- camera capture settings + live stream ---
 
     @app.get("/camera")
     def camera():
-        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        from .camera_service import CAMERA, CAMERA_RESOLUTIONS
         return {"ok": True, "resolution": CAMERA["resolution"],
                 "options": CAMERA_RESOLUTIONS}
 
     @app.post("/camera")
     def set_camera(req: CameraRequest):
-        from .robot_camera import CAMERA, CAMERA_RESOLUTIONS
+        from .camera_service import CAMERA, CAMERA_RESOLUTIONS
         value = req.resolution.strip().lower()
         if value not in CAMERA_RESOLUTIONS:
             return {"ok": False, "error": "unknown resolution",
                     "options": CAMERA_RESOLUTIONS}
-        CAMERA["resolution"] = value  # capture reopens on next vision request
+        CAMERA["resolution"] = value  # capture reopens on next grab
         logger.info(f"Camera capture resolution set to {value}")
         return {"ok": True, "resolution": value}
+
+    @app.get("/camera/stream")
+    async def camera_stream():
+        """Live MJPEG feed for the panel (~8fps). The generator dies with the
+        client connection, so an unwatched stream costs nothing."""
+        from fastapi.responses import StreamingResponse
+
+        from . import camera_service
+
+        async def frames():
+            loop = asyncio.get_running_loop()
+            while True:
+                jpeg = await loop.run_in_executor(None, camera_service.grab_jpeg)
+                if jpeg is None:
+                    await asyncio.sleep(1.0)  # camera unavailable; keep trying
+                    continue
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n"
+                       b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                       + jpeg + b"\r\n")
+                await asyncio.sleep(0.12)
+
+        return StreamingResponse(frames(),
+                                 media_type="multipart/x-mixed-replace; boundary=frame")
 
     # --- speaker registry (diarization) ---
 

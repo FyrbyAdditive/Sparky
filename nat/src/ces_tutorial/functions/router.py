@@ -227,7 +227,7 @@ async def router_fn(config: RouterConfig, builder: Builder):
             messages_dict = []
             logger.warning("No messages received in chat request")
 
-        # Deterministic action routing before the LLM gets a say
+        # Deterministic routing before the LLM gets a say
         last_text = ""
         if messages_dict:
             content = messages_dict[0].get("content")
@@ -237,7 +237,13 @@ async def router_fn(config: RouterConfig, builder: Builder):
                 last_text = " ".join(
                     p.get("text", "") for p in content
                     if isinstance(p, dict) and p.get("type") == "text")
-        if _ACTION_RE.search(last_text):
+        if "(startup)" in last_text:
+            # the bot's own greeting instruction: plain conversation — the
+            # LLM router once sent it to the ReAct agent, whose raw trace
+            # got spoken aloud
+            logger.info("Router: startup greeting — deterministic route 'chit_chat'")
+            user_intent = "chit_chat"
+        elif _ACTION_RE.search(last_text):
             logger.info("Router: action keyword — deterministic route 'other'")
             user_intent = "other"
         else:

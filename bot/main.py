@@ -376,6 +376,28 @@ async def run_bot():
         mic_gate=mic_gate,
     )
 
+    # Warm shodan's prefix cache before the first real turn: one throwaway
+    # single-token completion carrying the persona system prompt (the
+    # chitchat/vision prefix — the router and agent prefixes get warmed by
+    # the greeting turn moments later). Cold first turns used to pay full
+    # prefill for the persona.
+    async def _warm_prefix():
+        import httpx
+        base = os.getenv("CHITCHAT_LLM_BASE_URL", "http://localhost:8010/v1").rstrip("/")
+        model = os.getenv("CHITCHAT_LLM_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.post(f"{base}/chat/completions",
+                                  headers={"Authorization": "Bearer EMPTY"},
+                                  json={"model": model, "max_tokens": 1,
+                                        "messages": [{"role": "system", "content": messages[0]["content"]},
+                                                     {"role": "user", "content": "hi"}]})
+            logger.info("Prefix warmup: persona prefill cached on the engine")
+        except Exception as e:
+            logger.warning(f"Prefix warmup skipped: {e}")
+
+    asyncio.create_task(_warm_prefix())
+
     # Greet on startup through the robot speaker. Must be a USER turn: a
     # conversation with only a system message 400s on the chat endpoint
     # ("No user query found"), which made the robot's first words a spoken

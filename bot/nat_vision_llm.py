@@ -17,6 +17,7 @@ from pipecat.frames.frames import (
     LLMContextFrame,
     UserImageRequestFrame,
     UserImageRawFrame,
+    UserStartedSpeakingFrame,
     InterruptionFrame,
     InputAudioRawFrame,
     UserSpeakingFrame,
@@ -45,6 +46,7 @@ class NATVisionLLMService(NvidiaLLMService):
         self._user_id = user_id
         self._pending_image_future: Optional[asyncio.Future] = None
         self._last_image: Optional[UserImageRawFrame] = None
+        self._last_image_at: float = 0.0
         self._current_turn_has_image = False  # Track if we've fetched image for current turn
         self._max_image_dimension = max_image_dimension
         self._image_quality = image_quality
@@ -197,15 +199,29 @@ class NATVisionLLMService(NvidiaLLMService):
         if isinstance(frame, InterruptionFrame):
             self._current_turn_has_image = False
         
+        # Prefetch: start the camera grab while the user is still talking so
+        # the image is already in hand when the turn ends (the grab+encode
+        # used to sit on the post-speech critical path).
+        if isinstance(frame, UserStartedSpeakingFrame) and self._user_id:
+            if self._pending_image_future is None or self._pending_image_future.done():
+                self._pending_image_future = asyncio.Future()
+                await self.push_frame(
+                    UserImageRequestFrame(user_id=self._user_id, text="",
+                                          append_to_context=False),
+                    FrameDirection.UPSTREAM,
+                )
+
         # Capture incoming images for later use
         if isinstance(frame, UserImageRawFrame):
+            import time as _t
             self._last_image = frame
-            
+            self._last_image_at = _t.monotonic()
+
             # If we're waiting for an image, resolve the future
             if self._pending_image_future and not self._pending_image_future.done():
                 logger.debug("NATVisionLLMService: Image captured for pending request")
                 self._pending_image_future.set_result(frame)
-            
+
             # Don't pass the raw image frame downstream
             return
 
@@ -223,8 +239,11 @@ class NATVisionLLMService(NvidiaLLMService):
             if not self._current_turn_has_image:
                 logger.debug("NATVisionLLMService: Intercepting LLMMessagesFrame to add image")
 
-                # Fetch the image first
-                await self._fetch_and_wait_for_image(frame)
+                # Use the prefetched frame if it's fresh; otherwise fetch now
+                import time as _t
+                if not (self._last_image is not None
+                        and (_t.monotonic() - self._last_image_at) < 3.0):
+                    await self._fetch_and_wait_for_image(frame)
 
                 # Now add it to this frame's context
                 if self._last_image:

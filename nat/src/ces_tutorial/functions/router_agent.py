@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 import re
 
 from pydantic import Field
@@ -11,6 +13,10 @@ from nat.data_models.function import FunctionBaseConfig
 from nat.data_models.component_ref import LLMRef, FunctionRef
 
 logger = logging.getLogger(__name__)
+
+# Cross-request speculative chitchat (see _stream_routes)
+_SPECULATIVE = os.getenv("SPECULATIVE_CHITCHAT", "1").strip() != "0"
+_SPEC_DONE = object()
 
 _REACT_NOISE = re.compile(
     r"^(?:Thought|Action|Action Input|Observation)\s*:.*$", re.MULTILINE)
@@ -150,15 +156,60 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
             yield ChatResponseChunk.create_streaming_chunk(None, model="error", finish_reason="stop")
 
     async def _stream_routes(chat_request) -> AsyncGenerator[ChatResponseChunk]:
-        router_response = await router_function.ainvoke(chat_request)
+        # Speculative execution: chit_chat is the most common route, so its
+        # stream starts CONCURRENTLY with the router call and is kept only
+        # if the router agrees (cancelled otherwise). Turn latency becomes
+        # max(router, chitchat-TTFT) instead of their sum; the cancelled
+        # loser costs a few tokens and prefix caching makes the repeated
+        # prefill nearly free. SPECULATIVE_CHITCHAT=0 disables.
+        chit_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=True)
+        spec_queue: asyncio.Queue = asyncio.Queue()
+
+        async def _speculative_chitchat():
+            try:
+                async for chunk in chitchat_llm.astream(chit_messages):
+                    await spec_queue.put(chunk)
+                await spec_queue.put(_SPEC_DONE)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                await spec_queue.put(e)
+
+        spec_task = asyncio.create_task(_speculative_chitchat()) if _SPECULATIVE else None
+
+        try:
+            router_response = await router_function.ainvoke(chat_request)
+        except Exception:
+            if spec_task is not None:
+                spec_task.cancel()
+            raise
         route = router_response.choices[0].message.content
         logger.info(f"RouterAgent(stream): intent '{route}'")
+
+        if spec_task is not None and route == "chit_chat":
+            # winner: replay buffered chunks and continue live
+            while True:
+                item = await spec_queue.get()
+                if item is _SPEC_DONE:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                content = getattr(item, "content", None)
+                if content:
+                    yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="chitchat")
+            yield ChatResponseChunk.create_streaming_chunk(None, model="chitchat", finish_reason="stop")
+            return
+        if spec_task is not None:
+            spec_task.cancel()
+            try:
+                await spec_task
+            except BaseException:
+                pass
 
         # Intermediate chunks must carry finish_reason=None (from_string marks
         # every chunk "stop", which ends the client stream after one chunk).
         if route == "chit_chat":
-            langchain_messages = _convert_to_langchain_messages(chat_request.messages, redact_images=True)
-            async for chunk in chitchat_llm.astream(langchain_messages):
+            async for chunk in chitchat_llm.astream(chit_messages):
                 content = getattr(chunk, "content", None)
                 if content:
                     yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="chitchat")

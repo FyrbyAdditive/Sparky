@@ -613,11 +613,32 @@ class MovementManager:
         self._manage_move_queue(current_time)
         self._manage_breathing(current_time)
 
-    def _calculate_blended_antennas(self, target_antennas: Tuple[float, float]) -> Tuple[float, float]:
-        """Blend target antennas with listening freeze state and update blending."""
+    def _calculate_blended_antennas(
+        self, target_antennas: Tuple[float, float], move_active: bool = False,
+    ) -> Tuple[float, float]:
+        """Blend target antennas with listening freeze state and update blending.
+
+        The listening freeze holds the antennas still while the robot waits
+        for speech. But an explicitly-queued animation must be able to move
+        the antennas even while listening — otherwise antenna-only clips
+        (antennaLargeWiggle/antennaSmallWiggle) are invisible, since
+        set_listening(True) latches on the first user/bot utterance and is
+        never cleared. So an active primary move takes antenna priority: it
+        commands the clip's antennas directly and re-seats the frozen pose to
+        wherever the clip leaves them, so the post-move blend starts clean.
+        """
         now = self._now()
-        listening = self._is_listening
+        listening = self._is_listening and not move_active
         listening_antennas = self._listening_antennas
+
+        if move_active:
+            # animation owns the antennas; keep the freeze reference current
+            # so blending resumes smoothly from the clip's final pose
+            self._last_listening_blend_time = now
+            self._antenna_unfreeze_blend = 1.0
+            self._listening_antennas = (
+                float(target_antennas[0]), float(target_antennas[1]))
+            return (float(target_antennas[0]), float(target_antennas[1]))
         blend = self._antenna_unfreeze_blend
         blend_duration = self._antenna_blend_duration
         last_update = self._last_listening_blend_time
@@ -767,8 +788,14 @@ class MovementManager:
             # 4) Build primary and secondary full-body poses, then fuse them
             head, antennas, body_yaw = self._compose_full_body_pose(loop_start)
 
-            # 5) Apply listening antenna freeze or blend-back
-            antennas_cmd = self._calculate_blended_antennas(antennas)
+            # 5) Apply listening antenna freeze or blend-back. An actively
+            # playing animation (non-breathing primary move) overrides the
+            # freeze so antenna-only clips are visible while listening.
+            move_active = (
+                self.state.current_move is not None
+                and not isinstance(self.state.current_move, BreathingMove)
+            )
+            antennas_cmd = self._calculate_blended_antennas(antennas, move_active)
 
             # 6) Single set_target call - the only control point
             self._issue_control_command(head, antennas_cmd, body_yaw)

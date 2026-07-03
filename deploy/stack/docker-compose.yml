@@ -123,6 +123,26 @@ services:
       start_period: 2h
       start_interval: 10s
 
+  # Self-hosted metasearch for the web_search tool: aggregates many engines
+  # behind one LAN JSON API, so no single engine's bot-detection (DDG served
+  # 202 challenges, Mojeek 403s after one chatty evening) kills search.
+  searxng:
+    restart: unless-stopped
+    profiles: [ "magi" ]
+    container_name: searxng
+    image: searxng/searxng:latest
+    ports:
+      - "8888:8080"
+    volumes:
+      - ../searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # cookie-signing key for a LAN-only service; override in stack/.env if desired
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-c9d1a2f4e6b84703a5d2c1e0f7b39a58}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      start_period: 5m
+      start_interval: 5s
+
   # HTTPS front for the bot UI (mic/camera need a secure context off-localhost).
   # Put per-machine certs in ../tls/certs (magi.crt/magi.key — gitignored).
   tls-proxy:

@@ -12,7 +12,10 @@ fetched with httpx and parsed with beautifulsoup4 (both already shipped
 transitively via nvidia-nat[langchain], and now declared in pyproject).
 """
 
+import asyncio
 import logging
+import os
+import time
 from urllib.parse import parse_qs, urlparse
 
 from pydantic import Field
@@ -74,16 +77,65 @@ def _unwrap_ddg_url(href: str) -> str:
 
 
 class WebSearchConfig(FunctionBaseConfig, name="web_search_duckduckgo"):
-    """Search the live web with DuckDuckGo (optional tool, panel-gated)."""
+    """Search the live web (optional tool, panel-gated). Primary engine is
+    the self-hosted SearXNG aggregator; direct DuckDuckGo/Mojeek scraping
+    remains as fallback when SearXNG is down."""
+    searxng_url: str = Field(
+        default="http://magi:8888",
+        description="Self-hosted SearXNG base URL (JSON API)",
+    )
     base_url: str = Field(
         default="https://html.duckduckgo.com/html/",
-        description="DuckDuckGo HTML search endpoint",
+        description="DuckDuckGo HTML search endpoint (fallback)",
     )
     robot_api_base_url: str = Field(
         default="http://localhost:7861",
         description="Robot API base URL (optional-tools registry)",
     )
     max_results: int = Field(default=5, description="Number of results to return")
+
+
+# Fallback engine: DDG's anomaly detection flags an IP after bursts of
+# automated queries (observed live: HTTP 202 challenge pages from every
+# DDG endpoint after one chatty evening). Mojeek runs its own independent
+# index, tolerates polite scraping, and serves direct result URLs.
+_MOJEEK_URL = "https://www.mojeek.com/search"
+
+# Client-side politeness (what got us flagged: the ReAct agent fired four
+# searches inside one turn). Same practice as the ddgs library's ~1-2s
+# inter-request throttle, plus a short-TTL cache so retried/repeated
+# queries within a conversation never hit the engines twice. Shared
+# across web_search AND read_web_page (one outbound budget).
+_MIN_INTERVAL_SECS = float(os.getenv("SEARCH_MIN_INTERVAL_SECS", "1.5"))
+_CACHE_TTL_SECS = float(os.getenv("SEARCH_CACHE_TTL_SECS", "300"))
+_CACHE_MAX = 64
+_throttle_lock = asyncio.Lock()
+_last_request_ts = 0.0
+_result_cache: dict[str, tuple[float, str]] = {}
+
+
+async def _polite_slot():
+    """Serialize outbound requests and enforce the minimum interval."""
+    global _last_request_ts
+    async with _throttle_lock:
+        wait = _last_request_ts + _MIN_INTERVAL_SECS - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_request_ts = time.monotonic()
+
+
+def _cache_get(key: str) -> str | None:
+    hit = _result_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _CACHE_TTL_SECS:
+        return hit[1]
+    return None
+
+
+def _cache_put(key: str, value: str):
+    if len(_result_cache) >= _CACHE_MAX:
+        oldest = min(_result_cache, key=lambda k: _result_cache[k][0])
+        del _result_cache[oldest]
+    _result_cache[key] = (time.monotonic(), value)
 
 
 @register_function(config_type=WebSearchConfig)
@@ -94,20 +146,26 @@ async def web_search_fn(config: WebSearchConfig, builder: Builder):
     # one client for the workflow's lifetime — per-call clients redo TCP setup
     client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True)
 
-    async def _search(query: str) -> str:
-        enabled = await _gate_enabled(client, config.robot_api_base_url)
-        if enabled is None:
-            return GATE_UNREACHABLE_MSG
-        if not enabled:
-            return DISABLED_MSG
+    async def _searxng_results(query: str) -> list[tuple[str, str, str]]:
+        # aggregates many engines server-side and returns clean JSON — no
+        # HTML scraping, and immune to any single engine blocking us
+        r = await client.get(f"{config.searxng_url.rstrip('/')}/search",
+                             params={"q": query, "format": "json"})
+        r.raise_for_status()
+        return [(res.get("title", ""), res.get("url", ""),
+                 res.get("content", "") or "")
+                for res in r.json().get("results", [])[:config.max_results]
+                if res.get("url")]
 
-        try:
-            r = await client.get(config.base_url, params={"q": query})
-            r.raise_for_status()
-        except Exception as e:
-            logger.error(f"web search failed: {e}")
-            return f"I couldn't reach the internet to search ({e})."
-
+    async def _ddg_results(query: str) -> list[tuple[str, str, str]]:
+        r = await client.get(config.base_url, params={"q": query})
+        # DDG signals "prove you're human" with a 202 challenge page (and
+        # sometimes a 200 with no result nodes) — treat both as no results
+        # so the fallback engine takes over
+        if r.status_code != 200:
+            logger.warning(f"web search: DDG returned {r.status_code}, "
+                           "likely rate-limited — trying fallback engine")
+            return []
         soup = BeautifulSoup(r.text, "html.parser")
         results = []
         for div in soup.select("div.result"):
@@ -122,15 +180,62 @@ async def web_search_fn(config: WebSearchConfig, builder: Builder):
             results.append((a.get_text(strip=True), url, snippet))
             if len(results) >= config.max_results:
                 break
+        return results
+
+    async def _mojeek_results(query: str) -> list[tuple[str, str, str]]:
+        r = await client.get(_MOJEEK_URL, params={"q": query})
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for li in soup.select("ul.results-standard li"):
+            a = li.select_one("h2 a") or li.find("a")
+            if a is None or not a.get_text(strip=True):
+                continue
+            snippet_el = li.select_one("p.s")
+            snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+            results.append((a.get_text(strip=True), a.get("href", ""), snippet))
+            if len(results) >= config.max_results:
+                break
+        return results
+
+    async def _search(query: str) -> str:
+        enabled = await _gate_enabled(client, config.robot_api_base_url)
+        if enabled is None:
+            return GATE_UNREACHABLE_MSG
+        if not enabled:
+            return DISABLED_MSG
+
+        cache_key = f"search:{query.strip().lower()}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        await _polite_slot()
+
+        results = []
+        errors = []
+        for name, engine in (("SearXNG", _searxng_results),
+                             ("DuckDuckGo", _ddg_results),
+                             ("Mojeek", _mojeek_results)):
+            try:
+                results = await engine(query)
+            except Exception as e:
+                logger.error(f"web search via {name} failed: {e}")
+                errors.append(f"{name}: {e}")
+            if results:
+                break
 
         if not results:
-            # a 200 with zero results is usually DDG's bot-check page
-            return (f"No web results found for '{query}' (the search service "
-                    "may be rate-limiting; try again in a moment).")
+            if errors and len(errors) == 3:
+                return f"I couldn't reach the internet to search ({errors[0]})."
+            return (f"No web results found for '{query}' right now (the "
+                    "search services may be rate-limiting; try again in a "
+                    "few minutes, or answer from what you already know).")
 
-        return "\n\n".join(
+        out = "\n\n".join(
             f"{i}. {title}\n   {url}\n   {snippet}"
             for i, (title, url, snippet) in enumerate(results, 1))
+        _cache_put(cache_key, out)
+        return out
 
     try:
         yield FunctionInfo.from_fn(
@@ -174,6 +279,12 @@ async def web_read_page_fn(config: WebReadPageConfig, builder: Builder):
         if not url.lower().startswith(("http://", "https://")):
             return "That doesn't look like a web URL I can open (need http/https)."
 
+        cache_key = f"read:{url}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        await _polite_slot()
+
         try:
             r = await client.get(url)
             r.raise_for_status()
@@ -200,6 +311,7 @@ async def web_read_page_fn(config: WebReadPageConfig, builder: Builder):
                     "snippets you already have.")
         if len(text) > config.max_chars:
             text = text[:config.max_chars] + "\n...(truncated)"
+        _cache_put(cache_key, text)
         return text
 
     try:

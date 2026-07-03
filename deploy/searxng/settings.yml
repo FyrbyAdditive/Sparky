@@ -1,0 +1,10 @@
+# SearXNG for Sparky's web_search tool — LAN-only metasearch aggregator.
+# JSON format must be enabled explicitly or /search?format=json returns 403.
+use_default_settings: true
+server:
+  limiter: false        # LAN clients only; the Docker port is not exposed beyond the host firewall
+  method: GET
+search:
+  formats:
+    - html
+    - json

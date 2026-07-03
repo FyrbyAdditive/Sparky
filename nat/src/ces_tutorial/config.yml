@@ -31,6 +31,7 @@ functions:
    # (panel > Tools); disabled/unreachable -> polite refusal, never online
    web_search:
       _type: web_search_duckduckgo
+      searxng_url: ${SEARXNG_URL:-http://magi:8888}
       robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
       max_results: 5
 

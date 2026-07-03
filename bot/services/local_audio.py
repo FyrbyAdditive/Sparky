@@ -9,7 +9,12 @@ for the control panel's /status.
 """
 
 import asyncio
+import os
+import subprocess
+import sys
+import threading
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -32,6 +37,10 @@ AUDIO_STATS = {
     "mic_reopens": 0,
     "out_reopens": 0,
     "out_write_errors": 0,
+    # capture-continuity telemetry: holes here mean words lost before ASR
+    "mic_overflows": 0,       # PortAudio reported input overflow/underflow
+    "mic_gap_events": 0,      # >150ms between 100ms callbacks
+    "mic_max_gap_ms": 0,
 }
 
 # Shared gate state, written by MicGateProcessor. The capture callback zeroes
@@ -46,28 +55,53 @@ def gate_active() -> bool:
 
 
 class ResilientAudioInput(LocalAudioInputTransport):
-    """Input with deep buffering, its own PortAudio instance, and a watchdog.
+    """Input from a dedicated capture process, with a stall watchdog.
 
-    The stock 20ms buffers through the pipewire ALSA plugin stalled the
-    capture stream every ~10s on the Reachy's 16kHz device; 100ms buffers
-    and an unshared PyAudio instance keep it fed.
+    Capture cannot share the bot process: GIL contention (100Hz motion
+    thread, pipeline churn) starves an in-process PortAudio callback for
+    150-200ms every couple of seconds — measured 23 gaps/40s — losing audio
+    slices that shred ASR finals mid-utterance. A helper process captures
+    cleanly and the pipe absorbs bot-side scheduling jitter losslessly.
+    AUDIO_CAPTURE_PROCESS=0 falls back to the old in-process callback.
+    (That path keeps its 100ms buffers + unshared PyAudio instance: stock
+    20ms buffers through the pipewire ALSA plugin stalled every ~10s.)
     """
 
     def __init__(self, py_audio, params):
         super().__init__(py_audio, params)
         self._watchdog_task = None
+        self._use_capture_process = os.getenv("AUDIO_CAPTURE_PROCESS", "1").strip() != "0"
+        self._capture_proc: subprocess.Popen | None = None
+        self._reader_thread: threading.Thread | None = None
+        self._reader_generation = 0
+
+    # --- shared telemetry + gating, both capture paths ---
+
+    def _note_frame(self, data: bytes) -> bytes:
+        now = time.time()
+        last = AUDIO_STATS["mic_last_frame_ts"]
+        if last > 0:
+            gap_ms = int((now - last) * 1000)
+            if gap_ms > 150:  # cadence is 100ms; larger means a hole/jitter
+                AUDIO_STATS["mic_gap_events"] += 1
+                if gap_ms > AUDIO_STATS["mic_max_gap_ms"]:
+                    AUDIO_STATS["mic_max_gap_ms"] = gap_ms
+        AUDIO_STATS["mic_last_frame_ts"] = now
+        if gate_active():
+            data = b"\x00" * len(data)
+        return data
 
     def _audio_in_callback(self, in_data, frame_count, time_info, status):
-        AUDIO_STATS["mic_last_frame_ts"] = time.time()
-        if gate_active():
-            in_data = b"\x00" * len(in_data)
+        if status:  # PortAudio overflow/underflow flags
+            AUDIO_STATS["mic_overflows"] += 1
+        in_data = self._note_frame(in_data)
         return super()._audio_in_callback(in_data, frame_count, time_info, status)
 
     async def start(self, frame: StartFrame):
         # Reimplemented (skipping LocalAudioInputTransport.start) to control
         # frames_per_buffer; grandparent handles the base lifecycle.
         await super(LocalAudioInputTransport, self).start(frame)
-        if self._in_stream:
+        if self._in_stream or self._capture_proc:
             return
         self._sample_rate = self._params.audio_in_sample_rate or frame.audio_in_sample_rate
         await asyncio.get_running_loop().run_in_executor(None, self._open)
@@ -77,6 +111,14 @@ class ResilientAudioInput(LocalAudioInputTransport):
             self._watchdog_task = self.create_task(self._watchdog())
 
     def _open(self):
+        if self._use_capture_process:
+            try:
+                self._open_capture_process()
+                return
+            except Exception as e:
+                logger.error(f"ResilientAudioInput: capture process failed ({e}); "
+                             "falling back to in-process capture")
+                self._use_capture_process = False
         num_frames = int(self._sample_rate / 10)  # 100ms buffers
         self._in_stream = self._py_audio.open(
             format=self._py_audio.get_format_from_width(2),
@@ -88,6 +130,56 @@ class ResilientAudioInput(LocalAudioInputTransport):
             input_device_index=self._params.input_device_index,
         )
         self._in_stream.start_stream()
+
+    def _open_capture_process(self):
+        helper = Path(__file__).resolve().parent / "capture_helper.py"
+        device_name = os.getenv("AUDIO_IN_DEVICE", "Reachy Mini").strip().strip('"')
+        self._capture_proc = subprocess.Popen(
+            [sys.executable, "-u", str(helper), device_name, str(self._sample_rate),
+             str(self._params.audio_in_channels)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        self._reader_generation += 1
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            args=(self._capture_proc, self._reader_generation),
+            daemon=True, name="mic-capture-reader",
+        )
+        self._reader_thread.start()
+        logger.info(f"ResilientAudioInput: capture process started (pid {self._capture_proc.pid}, "
+                    f"device '{device_name}', {self._sample_rate}Hz)")
+
+    def _reader_loop(self, proc: subprocess.Popen, generation: int):
+        from pipecat.frames.frames import InputAudioRawFrame
+
+        chunk = int(self._sample_rate / 10) * 2 * self._params.audio_in_channels
+        loop = self.get_event_loop()
+        stdout = proc.stdout
+        buf = b""
+        while generation == self._reader_generation:
+            try:
+                data = stdout.read(chunk - len(buf))
+            except Exception:
+                break
+            if not data:
+                break  # helper exited; watchdog respawns via stall detection
+            buf += data
+            if len(buf) < chunk:
+                continue
+            frame_bytes = self._note_frame(buf)
+            buf = b""
+            frame = InputAudioRawFrame(
+                audio=frame_bytes,
+                sample_rate=self._sample_rate,
+                num_channels=self._params.audio_in_channels,
+            )
+            try:
+                asyncio.run_coroutine_threadsafe(self.push_audio_frame(frame), loop)
+            except RuntimeError:
+                break  # loop closed — shutting down
+        if generation == self._reader_generation:
+            logger.warning("ResilientAudioInput: capture reader ended")
 
     async def _watchdog(self):
         while True:
@@ -102,7 +194,22 @@ class ResilientAudioInput(LocalAudioInputTransport):
                 except Exception as e:
                     logger.error(f"ResilientAudioInput: reopen failed: {e}")
 
+    def _kill_capture_process(self):
+        proc = self._capture_proc
+        self._capture_proc = None
+        self._reader_generation += 1  # detach any live reader thread
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
     def _reopen(self):
+        self._kill_capture_process()
         old = self._in_stream
         self._in_stream = None
         try:
@@ -111,7 +218,11 @@ class ResilientAudioInput(LocalAudioInputTransport):
         except Exception:
             pass
         self._open()
-        logger.info("ResilientAudioInput: mic stream reopened")
+        logger.info("ResilientAudioInput: mic capture reopened")
+
+    async def cleanup(self):
+        self._kill_capture_process()
+        await super().cleanup()
 
 
 class ResilientAudioOutput(LocalAudioOutputTransport):

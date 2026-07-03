@@ -174,6 +174,11 @@ async def run_bot():
         server=os.getenv("RIVA_SERVER", "localhost:50051"),
         use_ssl=False,
         model_function_map={"function_id": "", "model_name": os.getenv("RIVA_MODEL", "")},
+        # pipecat defaults stop_history to 320 (ms), telling Riva to
+        # finalize at every ~1/3s pause — sentences shred into fragment
+        # finals ("The / Fox jumps over / Do"). -1 = server-default
+        # endpointing, verified to yield whole-utterance finals here.
+        stop_history=int(os.getenv("RIVA_STOP_HISTORY_MS", "-1")),
     )
 
     # Streaming TTS from the local Kokoro-FastAPI server.

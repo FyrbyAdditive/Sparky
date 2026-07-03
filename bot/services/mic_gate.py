@@ -52,6 +52,7 @@ class MicGateProcessor(FrameProcessor):
         logger.info(f"MicGate: {'muted' if muted else 'unmuted'}")
 
     def _set_bot_speaking(self, speaking: bool):
+        was_speaking = self._bot_speaking
         self._bot_speaking = speaking
         now = time.monotonic()
         if speaking:
@@ -59,9 +60,14 @@ class MicGateProcessor(FrameProcessor):
             if self._gate_while_speaking:
                 GATE["bot_speaking"] = True
         else:
-            self._bot_stopped_at = now
             GATE["bot_speaking"] = False
-            GATE["tail_until"] = now + SPEECH_TAIL_SECS
+            # Tail only after ACTUAL bot speech. InterruptionFrame fires on
+            # every user speech onset; an unconditional tail here zeroed the
+            # first 300ms of every user utterance ("quick" in "the quick
+            # brown fox" — verified by tapping the ASR input).
+            if was_speaking:
+                self._bot_stopped_at = now
+                GATE["tail_until"] = now + SPEECH_TAIL_SECS
 
     def _in_speech_window(self) -> bool:
         if self._bot_speaking:

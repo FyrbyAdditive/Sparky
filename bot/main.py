@@ -178,7 +178,11 @@ async def run_bot():
         # finalize at every ~1/3s pause — sentences shred into fragment
         # finals ("The / Fox jumps over / Do"). -1 = server-default
         # endpointing, verified to yield whole-utterance finals here.
+        # The EOU pair applies to models with end-of-utterance detection
+        # (Nemotron ASR streaming); -1 keeps server defaults there too.
         stop_history=int(os.getenv("RIVA_STOP_HISTORY_MS", "-1")),
+        stop_history_eou=int(os.getenv("RIVA_STOP_HISTORY_EOU_MS", "-1")),
+        stop_threshold_eou=float(os.getenv("RIVA_STOP_THRESHOLD_EOU", "-1.0")),
     )
 
     # Streaming TTS from the local Kokoro-FastAPI server.

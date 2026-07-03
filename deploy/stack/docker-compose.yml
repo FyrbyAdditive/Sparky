@@ -167,6 +167,39 @@ services:
               count: all
               capabilities: [ gpu ]
 
+  # Nemotron 3.5 streaming ASR (0.6b) — alternative STT for A/B against
+  # Parakeet. Not part of the "audio" profile; bring it up by name:
+  #   cd deploy/stack && docker compose --env-file envfile-merged up -d nemotron-asr
+  # Bot-side switch: RIVA_SERVER=<host>:50052 (Parakeet stays on :50051).
+  nemotron-asr:
+    restart: unless-stopped
+    profiles: [ "audio-alt" ]
+    container_name: nemotron-asr
+    image: nvcr.io/nim/nvidia/nemotron-asr-streaming:1.2.0
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY:?NGC key needed to initialize the NIM}
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+    ports:
+      - "50052:50051"
+      - "9001:9000"
+    volumes:
+      - nim-cache:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/v1/health/ready"]
+      start_period: 2h
+      start_interval: 5s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
   wiki-offline:
     restart: unless-stopped
     profiles: [ "wiki" ]

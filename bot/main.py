@@ -211,6 +211,30 @@ class LivenessSTT(NvidiaSTTService):
         self._liveness_strikes = 0
         await super()._handle_response(response)
 
+    async def _do_reconnect(self):
+        # The stock reconnect awaits cancelling the response thread WITHOUT
+        # closing the audio iterator it blocks on — with a dead server the
+        # cancel never completes, _reconnecting stays True forever and the
+        # whole service wedges (observed live). Swap in a fresh iterator and
+        # close the old one FIRST: that raises StopIteration in the stuck
+        # thread (gRPC half-close), so the cancel actually finishes.
+        from pipecat.services.nvidia.stt import AudioChunkIterator
+        old = self._audio_iterator
+        self._audio_iterator = AudioChunkIterator(self.get_event_loop())
+        if old is not None and not old.closed:
+            try:
+                await old.close()
+            except Exception:
+                pass
+        try:
+            await asyncio.wait_for(super()._do_reconnect(), timeout=15.0)
+        except asyncio.TimeoutError:
+            # emergency escape: abandon the stuck thread so the NEXT liveness
+            # strike can rebuild from a clean slate
+            logger.error("LivenessSTT: reconnect stalled >15s; detaching stuck stream task")
+            self._thread_task = None
+            raise
+
     async def _liveness_watchdog(self):
         import time as _t
         while True:

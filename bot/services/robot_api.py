@@ -674,6 +674,9 @@ def _build_app() -> FastAPI:
             return {"ok": False, "error": "robot_not_connected"}
         res = get_director().request("user", clip=req.name, mirror=req.mirror)
         if res["accepted"]:
+            # a panel/agent play is user activity: hold the idle stillness
+            # clock like a conversation line would
+            LAST_INTERACTION["ts"] = _time_mod.monotonic()
             audio_frames = _animation_audio_frames(req.name)
             if audio_frames:
                 _queue_frames(audio_frames)

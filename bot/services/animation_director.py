@@ -145,8 +145,10 @@ class AnimationDirector:
         self.plays[source] += 1
         if source == "emotion" and intent:
             self._emotion_last[intent] = now
-        if source == "idle":
-            self._idle_last_play = now
+        # ANY play restarts the idle gap: without this, an idle clip could
+        # trail a user/emotion/speaking play the moment it finished (the
+        # uninvited-encore bug) because the gap only measured idle-to-idle
+        self._idle_last_play = now
         return {"accepted": True, "reason": None, "clip": name}
 
     # ------------------------------------------------------------- behaviors

@@ -11,6 +11,7 @@ from ces_tutorial.functions.web_search import (
     web_search_fn,
     web_read_page_fn,
 )
+from ces_tutorial.functions.react_stream import streaming_react_agent_workflow
 
 __all__ = [
     "router_fn",
@@ -21,4 +22,5 @@ __all__ = [
     "robot_remember_speaker_name_fn",
     "web_search_fn",
     "web_read_page_fn",
+    "streaming_react_agent_workflow",
 ]

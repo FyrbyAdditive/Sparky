@@ -227,6 +227,13 @@ async def router_agent_fn(config: RouterAgentConfig, builder: Builder):
                 "messages": nat_messages,
                 "model": chat_request.model if hasattr(chat_request, 'model') else "nemotron",
             }
+            # NB the agent stays buffered on purpose. A streaming variant
+            # (react_stream.py, _type react_agent_streaming) exists but is
+            # parked: eavesdropping Final-Answer tokens off astream_events
+            # cannot distinguish a generation the ReAct parser will REJECT
+            # from the real final answer — live test produced parse-retry
+            # spirals. Re-enable only with a design that hooks the parser's
+            # accept path itself.
             agent_response = await agent_function.ainvoke(agent_input)
             content = _clean_agent_reply(agent_response.choices[0].message.content)
             yield ChatResponseChunk.create_streaming_chunk(content, role="assistant", model="agent")

@@ -8,6 +8,7 @@ the router determines a query should go to the vision model.
 import asyncio
 import base64
 import io
+import os
 from typing import Optional
 
 from loguru import logger
@@ -119,6 +120,31 @@ class NATVisionLLMService(NvidiaLLMService):
             logger.error(f"Failed to encode image: {e}")
             return None
 
+    def _trim_history(self, messages):
+        """Prefix-stable sliding window over the shared conversation list.
+
+        The list grows forever otherwise (aggregators + /say append; idle
+        timeout is disabled by design), so per-turn prefill creeps up and a
+        multi-day session eventually hits the model's context cap. Trim in
+        place (same list object is shared with the aggregator and panel):
+        keep the system prefix + the most recent messages, cutting on a
+        user-message boundary so the kept window starts cleanly and the
+        cached system prefix stays byte-identical for vLLM prefix caching.
+        """
+        max_msgs = int(os.getenv("BOT_HISTORY_MAX_MESSAGES", "48"))
+        non_system_start = 1 if messages and messages[0].get("role") == "system" else 0
+        body = messages[non_system_start:]
+        if len(body) <= max_msgs:
+            return
+        tail = body[-max_msgs:]
+        # advance to the next user message so we never open mid-pair
+        while tail and tail[0].get("role") != "user":
+            tail.pop(0)
+        dropped = len(body) - len(tail)
+        messages[:] = messages[:non_system_start] + tail
+        logger.info(f"History window: dropped {dropped} old messages "
+                    f"({len(messages)} kept)")
+
     def _scrub_old_images(self, messages):
         """Remove image parts from earlier turns, keeping their text.
 
@@ -172,14 +198,14 @@ class NATVisionLLMService(NvidiaLLMService):
                 if isinstance(current_content, list):
                     messages[i]["content"].append({
                         "type": "image_url",
-                        "image_url": {"url": image_data_url, "detail": "auto"}
+                        "image_url": {"url": image_data_url, "detail": "low"}
                     })
                     logger.debug("Appended image to existing multimodal user message")
                 else:
                     # Convert string to multimodal format
                     messages[i]["content"] = [
                         {"type": "text", "text": current_content or user_message},
-                        {"type": "image_url", "image_url": {"url": image_data_url, "detail": "auto"}}
+                        {"type": "image_url", "image_url": {"url": image_data_url, "detail": "low"}}
                     ]
                     logger.debug("Converted user message to multimodal format with image")
                 return
@@ -227,6 +253,7 @@ class NATVisionLLMService(NvidiaLLMService):
 
         # For LLMContextFrame (not LLMMessagesFrame!), fetch image first (only once per turn)
         if isinstance(frame, LLMContextFrame):
+            self._trim_history(frame.context.messages)
             # Check if there's a user message in the context
             has_user_message = any(msg.get("role") == "user" for msg in frame.context.messages)
             
@@ -239,10 +266,12 @@ class NATVisionLLMService(NvidiaLLMService):
             if not self._current_turn_has_image:
                 logger.debug("NATVisionLLMService: Intercepting LLMMessagesFrame to add image")
 
-                # Use the prefetched frame if it's fresh; otherwise fetch now
-                import time as _t
-                if not (self._last_image is not None
-                        and (_t.monotonic() - self._last_image_at) < 3.0):
+                # Rolling last-good frame: the speech-onset prefetch keeps
+                # it fresh in practice, and a stale-but-recent frame beats
+                # blocking the reply for up to 2s behind the camera lock
+                # (which the panel MJPEG stream also contends for). Only
+                # if we have NO frame at all do we wait for one.
+                if self._last_image is None:
                     await self._fetch_and_wait_for_image(frame)
 
                 # Now add it to this frame's context

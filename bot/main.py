@@ -10,6 +10,7 @@
 
 import asyncio
 import os
+import time
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -17,7 +18,7 @@ from loguru import logger
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, UserStartedSpeakingFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -50,6 +51,25 @@ import sys as _sys
 
 logger.remove()
 logger.add(_sys.stderr, level=os.getenv("BOT_LOG_LEVEL", "INFO").upper())
+
+# Bridge stdlib logging into loguru: eight service modules log via
+# logging.getLogger and previously had no handler at all, so their INFO
+# lines (robot connects, animation plays, emotion reactions, panel
+# changes) silently vanished — only WARNING+ leaked out via lastResort.
+import logging as _logging
+
+
+class _InterceptHandler(_logging.Handler):
+    def emit(self, record):
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        logger.opt(depth=6, exception=record.exc_info).log(
+            level, record.getMessage())
+
+
+_logging.basicConfig(handlers=[_InterceptHandler()], level=_logging.INFO, force=True)
 
 
 def _acquire_single_instance_lock():
@@ -187,8 +207,7 @@ class LivenessSTT(NvidiaSTTService):
 
     async def start(self, frame):
         await super().start(frame)
-        import time as _t
-        self._last_response_at = _t.time()  # grace after (re)start
+        self._last_response_at = time.time()  # grace after (re)start
         if self._liveness_task is None:
             self._liveness_task = self.create_task(self._liveness_watchdog())
 
@@ -199,15 +218,13 @@ class LivenessSTT(NvidiaSTTService):
         await super().cleanup()
 
     async def process_frame(self, frame, direction):
-        from pipecat.frames.frames import UserStartedSpeakingFrame
+        # NB module-level imports: this runs for EVERY frame on the hot path
         if isinstance(frame, UserStartedSpeakingFrame):
-            import time as _t
-            self._last_user_speech_at = _t.time()
+            self._last_user_speech_at = time.time()
         await super().process_frame(frame, direction)
 
     async def _handle_response(self, response):
-        import time as _t
-        self._last_response_at = _t.time()
+        self._last_response_at = time.time()
         self._liveness_strikes = 0
         await super()._handle_response(response)
 
@@ -236,14 +253,13 @@ class LivenessSTT(NvidiaSTTService):
             raise
 
     async def _liveness_watchdog(self):
-        import time as _t
         while True:
             await asyncio.sleep(1.0)
             speech = self._last_user_speech_at
             if speech <= 0 or self._last_response_at >= speech:
                 self._liveness_strikes = 0
                 continue
-            if (_t.time() - speech) < self.LIVENESS_SECS:
+            if (time.time() - speech) < self.LIVENESS_SECS:
                 continue
             if getattr(self, "_reconnecting", False):
                 continue

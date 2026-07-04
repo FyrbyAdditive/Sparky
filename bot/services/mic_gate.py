@@ -27,7 +27,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
-from .local_audio import GATE
+from .local_audio import GATE, silence
 
 SPEECH_TAIL_SECS = 0.3
 # safety valve: no robot utterance lasts this long — a BotStoppedSpeaking
@@ -90,6 +90,6 @@ class MicGateProcessor(FrameProcessor):
                 self._set_bot_speaking(False)
             if self.muted or (self._gate_while_speaking and self._in_speech_window()):
                 # silence, not a gap — the ASR stream must keep its cadence
-                frame.audio = b"\x00" * len(frame.audio)
+                frame.audio = silence(len(frame.audio))
 
         await self.push_frame(frame, direction)

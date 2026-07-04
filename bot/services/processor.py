@@ -1,4 +1,3 @@
-import base64
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.frames.frames import (
     AudioRawFrame,
@@ -40,6 +39,6 @@ class ReachyWobblerProcessor(FrameProcessor):
         # this path, and hashing 24kHz audio per-frame is pure CPU waste.)
         elif isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
             if self.bot_is_speaking:
-                self.service.feed_audio(base64.b64encode(frame.audio).decode('utf-8'))
+                self.service.feed_audio(frame.audio)
 
         await self.push_frame(frame, direction)

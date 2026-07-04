@@ -2,7 +2,6 @@
 
 import time
 import queue
-import base64
 import logging
 import threading
 from typing import Tuple
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class HeadWobbler:
-    """Converts audio deltas (base64) into head movement offsets."""
+    """Converts raw s16 TTS audio into head movement offsets."""
 
     def __init__(
         self,
@@ -55,17 +54,24 @@ class HeadWobbler:
         # Track dropped frames for monitoring
         self._dropped_chunks = 0
 
-    def feed(self, delta_b64: str) -> None:
-        """Thread-safe: push audio into the consumer queue."""
-        buf = np.frombuffer(
-            base64.b64decode(delta_b64), dtype=np.int16
-        ).reshape(1, -1)
+    def feed(self, pcm: bytes) -> None:
+        """Thread-safe: push raw s16 PCM into the consumer queue.
 
-        # Downsample audio to reduce processing load
-        if SAMPLE_RATE != DOWNSAMPLE_RATE:
-            # Simple decimation for downsampling (take every nth sample)
-            decimation_factor = SAMPLE_RATE // DOWNSAMPLE_RATE
-            buf = buf[:, ::decimation_factor]
+        Takes bytes directly — the old path base64-encoded every TTS chunk
+        on the pipeline thread only to decode it again here. Downsampling
+        is a real linear resample now: the previous integer decimation was
+        a silent no-op (24000 // 16000 == 1), which fed the sway engine
+        1.5x the intended samples at a mislabeled rate and stretched its
+        oscillator timing.
+        """
+        samples = np.frombuffer(pcm, dtype=np.int16)
+
+        if SAMPLE_RATE != DOWNSAMPLE_RATE and len(samples) > 1:
+            n_out = int(len(samples) * DOWNSAMPLE_RATE / SAMPLE_RATE)
+            x_old = np.linspace(0.0, 1.0, len(samples), endpoint=False)
+            x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
+            samples = np.interp(x_new, x_old, samples).astype(np.int16)
+        buf = samples.reshape(1, -1)
 
         with self._state_lock:
             generation = self._generation

@@ -8,7 +8,7 @@ assistant speech (TTSTextFrame, after TTS). The callback receives
 
 from typing import Callable
 
-from pipecat.frames.frames import Frame, TranscriptionFrame, TTSTextFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame, TTSTextFrame
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
 
@@ -20,6 +20,11 @@ class TranscriptTap(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
+        # fast path: audio frames dominate traffic and are never tapped
+        if isinstance(frame, AudioRawFrame):
+            await self.push_frame(frame, direction)
+            return
 
         if self._role == "user" and isinstance(frame, TranscriptionFrame) and frame.text:
             item = {"role": "user", "text": frame.text}

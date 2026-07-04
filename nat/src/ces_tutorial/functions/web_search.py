@@ -117,11 +117,16 @@ async def _announce(client, robot_api_base_url: str, pool: list[str]):
     choices = [p for p in pool if p != _announce_state["last_phrase"]] or pool
     phrase = random.choice(choices)
     _announce_state["last_phrase"] = phrase
-    try:
-        await client.post(f"{robot_api_base_url.rstrip('/')}/speak",
-                          json={"text": phrase}, timeout=2.0)
-    except Exception as e:
-        logger.debug(f"announce failed (non-fatal): {e}")
+
+    async def _post():
+        try:
+            await client.post(f"{robot_api_base_url.rstrip('/')}/speak",
+                              json={"text": phrase}, timeout=2.0)
+        except Exception as e:
+            logger.debug(f"announce failed (non-fatal): {e}")
+
+    # true fire-and-forget: never sits on the search's critical path
+    asyncio.create_task(_post())
 
 
 # DDG's HTML endpoint serves a bot-check page to clients without a
@@ -133,17 +138,29 @@ _HEADERS = {
 }
 
 
+# Short TTL on the gate result: a ReAct turn can fire several tool calls
+# in a burst, and each previously paid a serial GET to the robot API (or a
+# 3s timeout if it stalled). Toggles still land within GATE_TTL_SECS.
+GATE_TTL_SECS = 5.0
+_gate_cache = {"ts": 0.0, "value": None}
+
+
 async def _gate_enabled(client, robot_api_base_url: str) -> bool | None:
     """True/False from the registry; None when the registry is unreachable
-    (callers fail closed on None)."""
+    (callers fail closed on None). Cached for GATE_TTL_SECS."""
+    now = time.monotonic()
+    if now - _gate_cache["ts"] < GATE_TTL_SECS:
+        return _gate_cache["value"]
     try:
         r = await client.get(f"{robot_api_base_url.rstrip('/')}/tools", timeout=3.0)
         r.raise_for_status()
         tool = r.json().get("tools", {}).get(GATE_TOOL, {})
-        return bool(tool.get("enabled"))
+        value = bool(tool.get("enabled"))
     except Exception as e:
         logger.warning(f"web tools: registry check failed ({e}) — staying offline")
-        return None
+        value = None
+    _gate_cache.update(ts=now, value=value)
+    return value
 
 
 def _unwrap_ddg_url(href: str) -> str:

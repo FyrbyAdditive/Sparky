@@ -40,9 +40,10 @@ _history: collections.deque = collections.deque(maxlen=200)
 _ws_queues: set = set()
 
 # Speaker-name registry (diarization): 0-based speaker tag -> known name.
-# Written by POST /speakers (panel or the NAT remember-speaker tool), read
-# by the pipeline's SpeakerLabelerProcessor (plain cross-thread dict read,
-# same pattern as _session).
+# CROSS-THREAD: written by POST /speakers (API loop) AND by the pipeline
+# thread (SpeakerLabelerProcessor auto-introductions); read from both.
+# Safe only because every access is a single-key get/set (atomic under
+# the GIL) — never iterate while another thread may mutate.
 _speaker_names: dict[int, str] = {}
 
 # Optional-tools registry: capabilities the NAT agent may use only when
@@ -214,8 +215,15 @@ ANIMATION_AUDIO = os.getenv("ANIMATION_AUDIO", "sfx").strip().lower()
 _OUT_RATE = 24000
 
 
+_pcm_cache: dict[str, bytes] = {}
+
+
 def _load_wav_pcm24k(path: Path) -> bytes | None:
-    """Load a wav as 24kHz mono s16 PCM (numpy linear resample)."""
+    """Load a wav as 24kHz mono s16 PCM (numpy linear resample), cached —
+    a clip's sfx was re-decoded and resampled on every single play."""
+    cached = _pcm_cache.get(str(path))
+    if cached is not None:
+        return cached
     import wave
 
     import numpy as np
@@ -234,7 +242,9 @@ def _load_wav_pcm24k(path: Path) -> bytes | None:
             x_old = np.linspace(0.0, 1.0, len(samples), endpoint=False)
             x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
             samples = np.interp(x_new, x_old, samples.astype(np.float32)).astype(np.int16)
-        return samples.tobytes()
+        pcm = samples.tobytes()
+        _pcm_cache[str(path)] = pcm
+        return pcm
     except Exception as e:
         logger.warning(f"animation audio: could not load {path.name}: {e}")
         return None

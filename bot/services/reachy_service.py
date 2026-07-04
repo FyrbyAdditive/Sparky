@@ -163,10 +163,10 @@ class ReachyService:
             self.robot = None
             # Don't raise - allow pipeline to run without Reachy
 
-    def feed_audio(self, audio_chunk_base64):
-        """Feeds audio from TTS to the wobble engine."""
+    def feed_audio(self, pcm: bytes):
+        """Feeds raw s16 TTS audio to the wobble engine."""
         if self.wobbler:
-            self.wobbler.feed(audio_chunk_base64)
+            self.wobbler.feed(pcm)
 
     def set_listening_pose(self):
         """Sets robot back to listening/idle pose."""

@@ -172,8 +172,11 @@
   details.animCat > summary::before { content: "▸ "; }
   details.animCat[open] > summary::before { content: "▾ "; }
   details.animCat > summary:hover { color: var(--text); }
+  /* cap expanded groups; the header count (e.g. "Emotions (78)") makes it
+     clear there's more than the visible rows, unlike the old hidden caps */
   .animGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-              gap: 6px; padding: 0 8px 8px; }
+              gap: 6px; padding: 0 8px 8px; max-height: 320px; overflow-y: auto;
+              overscroll-behavior: contain; }
   /* min-width:0 + wrapping: Firefox won't shrink grid items below their
      content, so long names overflowed the clipped card */
   .animGrid button { font-size: 12.5px; padding: 7px 4px; background: var(--bg-soft);

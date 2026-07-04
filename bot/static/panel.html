@@ -56,7 +56,9 @@
   }
   .chip.ok  { color: var(--ok);  border-color: rgba(62,207,142,.45); }
   .chip.bad { color: var(--bad); border-color: rgba(255,92,92,.45); }
-  #headerRight { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #headerRight { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #services { flex: 1; display: flex; justify-content: center; align-items: center;
+              gap: 6px; flex-wrap: wrap; min-width: 0; }
 
   button {
     background: var(--card); border: 1px solid var(--line); color: var(--text);
@@ -211,8 +213,6 @@
   .toolRow input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; flex: none; }
   .toolRow .desc { color: var(--dim); font-size: 12px; font-weight: 400; }
 
-  #services { display: flex; flex-wrap: wrap; gap: 6px; }
-  #models { font-size: 12px; color: var(--dim); margin-top: 10px; word-break: break-all; line-height: 1.6; }
 
   @media (max-width: 820px) {
     main { flex-direction: column; overflow-y: auto; }
@@ -226,6 +226,7 @@
   <h1>🤖 Sparky</h1>
   <span id="robotChip" class="chip">robot: …</span>
   <span id="sessionChip" class="chip">session: …</span>
+  <div id="services"></div>
   <div id="headerRight">
     <button id="muteBtn" title="Toggle the robot's microphone">🎤 mic on</button>
     <div id="volWrap" title="Robot speaker volume">
@@ -289,13 +290,6 @@
     <details class="sec" id="sec-tools">
       <summary>Tools &amp; features</summary>
       <div class="secBody"><div id="toolList"></div></div>
-    </details>
-    <details class="sec" id="sec-services">
-      <summary>Services</summary>
-      <div class="secBody">
-        <div id="services"></div>
-        <div id="models"></div>
-      </div>
     </details>
   </div>
 </main>
@@ -655,7 +649,6 @@ async function refreshStatus() {
                 ', helper overflows ' + (s.audio.mic_helper_overflows ?? '–');
       sv.appendChild(c);
     }
-    $('models').textContent = 'agent: ' + s.models.agent + ' · router: ' + s.models.router;
     syncCamera(s.camera);
     syncVoice(s.voice);
     syncSpeakers(s.speakers);

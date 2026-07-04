@@ -30,7 +30,10 @@ _ACTION_RE = re.compile(
     # the agent still decides which tool (web/wiki) to use
     r"search\s+the\s+(?:web|internet)|look\s+(?:it|that|this)\s+up|"
     r"(?:latest|today'?s?)\s+news|news\s+today|headlines?|"
-    r"weather|forecast|sports?\s+scores?)\b",
+    r"weather|forecast|sports?\s+scores?|"
+    r"timer|remind(?:er)?s?|alarms?|"
+    r"what\s+time|time\s+is\s+it|what.{0,10}(?:date|day)\s+is\s+it|"
+    r"volume|quieter|louder|(?:change|switch)\s+(?:your|the)?\s*voice)\b",
     re.IGNORECASE,
 )
 

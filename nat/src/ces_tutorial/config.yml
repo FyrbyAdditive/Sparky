@@ -41,11 +41,39 @@ functions:
       robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
       max_chars: 6000
 
+   weather_forecast:
+      _type: open_meteo_weather
+      robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+      default_location: ${WEATHER_DEFAULT_LOCATION:-Stockholm}
+
+   set_reminder:
+      _type: robot_set_reminder
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   list_reminders:
+      _type: robot_list_reminders
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   cancel_reminder:
+      _type: robot_cancel_reminder
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   take_photo:
+      _type: robot_take_photo
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   adjust_settings:
+      _type: robot_settings
+      base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
+
+   current_time:
+      _type: local_time
+
    router:
       _type: router
       route_config:
         - name: other
-          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes ANY request involving a physical action or gesture, even mixed with a question or other request, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep, nod while answering. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is. Also includes questions about current events, news, weather, sports scores, prices, or anything needing an internet search or reading a web page.
+          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions. Includes ANY request involving a physical action or gesture, even mixed with a question or other request, eg nod, dance, wiggle your antennas, look left/right/up/down, look around, wake up, go to sleep, nod while answering. Also includes when someone tells the robot their name, introduces themselves or another person, or asks the robot to remember or forget who a speaker is. Also includes questions about current events, news, weather, sports scores, prices, or anything needing an internet search or reading a web page. Also includes setting, listing or cancelling timers, alarms and reminders; asking the current time or date; taking a photo; and asking the robot to change its volume or voice.
         - name: chit_chat
           description: Any simple chit chat, small talk, or casual conversation.
         - name: image_understanding
@@ -59,10 +87,10 @@ functions:
       llm_name: agent_llm
       verbose: true
       parse_agent_response_max_retries: 3
-      tool_names: [wikipedia_search, play_animation, look_at, remember_speaker_name, web_search, read_web_page]
+      tool_names: [wikipedia_search, play_animation, look_at, remember_speaker_name, web_search, read_web_page, weather_forecast, set_reminder, list_reminders, cancel_reminder, take_photo, adjust_settings, current_time]
       # Images are redacted on this route (a separate vision route sees them);
       # without this the model tells users it has no camera.
-      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body. For factual or encyclopedic lookups prefer wikipedia_search (offline); use web_search only for current events, news, weather, prices, or anything needing the live internet, and read_web_page to open a promising result URL.
+      additional_instructions: You are embodied in a robot that does have a camera; questions about what you can see are answered elsewhere, so never claim you lack a camera or a body. For factual or encyclopedic lookups prefer wikipedia_search (offline); use web_search only for current events, news, prices, or anything needing the live internet, and read_web_page to open a promising result URL. For weather ALWAYS use weather_forecast, never web_search. For time or date questions ALWAYS use current_time. Use set_reminder/list_reminders/cancel_reminder for timers and reminders, take_photo for pictures, and adjust_settings when asked to change volume or voice.
 
 # All LLMs are served locally (vLLM/llama.cpp on the Spark(s)); endpoints and
 # model names come from the environment so model profiles can swap them

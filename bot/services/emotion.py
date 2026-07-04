@@ -12,7 +12,6 @@ Model files download once into the Hugging Face cache; offline afterwards.
 
 import asyncio
 import logging
-import random
 import re
 import time
 from dataclasses import dataclass
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 MODEL_REPO = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
 
 MIN_CONFIDENCE = 0.75
-COOLDOWN_SECS = 8.0
+# reaction cooldowns live in animation_director.EMOTION_COOLDOWN_SECS
 
 
 class Emotion(Enum):
@@ -42,23 +41,6 @@ class Emotion(Enum):
     FAREWELL = "farewell"
     GRATEFUL = "grateful"
     NEUTRAL = "neutral"
-
-
-# Emotion -> candidate animation clips from bot/animations; one is chosen
-# at random per reaction so repeated emotions don't replay one gesture.
-# Names that aren't in the loaded library are dropped at reactor startup
-# (the Pollen imports are optional), falling back to the always-present
-# photo-booth clips listed last.
-EMOTION_ANIMATIONS = {
-    Emotion.HAPPY: ["cheerful1", "laughing1", "success1", "antennaSmallWiggle"],
-    Emotion.EXCITED: ["enthusiastic1", "enthusiastic2", "amazed1", "antennaLargeWiggle"],
-    Emotion.SAD: ["sad1", "sad2", "attentive"],  # attentive = sympathetic lean-in
-    Emotion.CURIOUS: ["curious1", "inquiring1", "inquiring2", "intrigued5"],
-    Emotion.GREETING: ["welcoming1", "welcoming2", "antennaLargeWiggle"],
-    Emotion.FAREWELL: ["nod", "yes1"],
-    Emotion.GRATEFUL: ["grateful1", "proud1", "nod"],
-    # NEUTRAL: no reaction
-}
 
 
 @dataclass
@@ -182,24 +164,6 @@ class EmotionReactor:
     def __init__(self, service: ReachyService | None = None):
         self.service = service or ReachyService.get_instance()
         self.detector = EmotionDetector()
-        self._last_reaction: dict[Emotion, float] = {}
-        self._clips_cache: dict[Emotion, list[str]] = {}
-
-    def _available_clips(self, emotion: Emotion) -> list[str]:
-        """Candidates that actually exist in the loaded library (cached).
-        Keeps the map forward-compatible: unimported Pollen names drop out
-        with a log line instead of failing at play time."""
-        cached = self._clips_cache.get(emotion)
-        if cached is not None:
-            return cached
-        candidates = EMOTION_ANIMATIONS.get(emotion, [])
-        available = [c for c in candidates if self.service.animations.get(c)]
-        missing = sorted(set(candidates) - set(available))
-        if missing:
-            logger.info(f"Emotion {emotion.value}: clips not in library, "
-                        f"skipping: {', '.join(missing)}")
-        self._clips_cache[emotion] = available
-        return available
 
     def load(self) -> bool:
         return self.detector.load()
@@ -210,22 +174,15 @@ class EmotionReactor:
         if result.emotion is Emotion.NEUTRAL or result.confidence < MIN_CONFIDENCE:
             return
 
-        clips = self._available_clips(result.emotion)
-        if not clips:
-            return
-        clip = random.choice(clips)
+        # selection, cooldown and arbitration all live in the director now
+        from .animation_director import get_director
 
-        now = time.monotonic()
-        if now - self._last_reaction.get(result.emotion, 0.0) < COOLDOWN_SECS:
-            logger.debug(f"Emotion {result.emotion.value} in cooldown, skipping")
-            return
-        self._last_reaction[result.emotion] = now
-
+        res = get_director().request("emotion", intent=result.emotion.value)
         logger.info(
             f"Emotion: {result.emotion.value} ({result.confidence:.2f}, "
-            f"{result.inference_ms:.0f}ms) -> animation '{clip}'"
+            f"{result.inference_ms:.0f}ms) -> "
+            f"{res['clip'] if res['accepted'] else 'skipped: ' + res['reason']}"
         )
-        self.service.play_animation(clip)
 
 
 class EmotionReactorProcessor(FrameProcessor):

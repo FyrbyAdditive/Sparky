@@ -760,13 +760,19 @@ class MovementManager:
         self._thread.start()
         logger.debug("Move worker started")
 
-    def stop(self) -> None:
-        """Request the worker thread to stop and wait for it to exit."""
+    def stop(self, join: bool = True) -> None:
+        """Request the worker thread to stop.
+
+        join=False is the e-stop fast path: signal only and return
+        immediately — the worker exits on its next tick (<=10ms) and the
+        unbounded join (which could sit behind an in-flight set_target
+        RPC) stays off the safety-critical path.
+        """
         self._stop_event.set()
-        if self._thread is not None:
+        if join and self._thread is not None:
             self._thread.join()
             self._thread = None
-        logger.debug("Move worker stopped")
+        logger.debug("Move worker stop requested" if not join else "Move worker stopped")
 
     def working_loop(self) -> None:
         """Control loop main movements - reproduces main_works.py control architecture.

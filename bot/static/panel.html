@@ -73,6 +73,8 @@
   button.primary:hover { filter: brightness(1.08); }
   #estopBtn { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 750; }
   #estopBtn:hover { filter: brightness(1.1); border-color: var(--bad); }
+  #estopBtn.resume { background: var(--ok); border-color: var(--ok); color: #06170f; }
+  #estopBtn.resume:hover { filter: brightness(1.1); border-color: var(--ok); }
   #muteBtn.muted { background: var(--bad); border-color: var(--bad); color: #fff; }
 
   #volWrap { display: none; align-items: center; gap: 8px; }
@@ -369,11 +371,23 @@ async function setMute(target) {
   const r = await post('/mute', {muted: target});
   if (r && r.ok) setMuted(r.muted);
 }
+let estopped = false;
+function setEstopped(v) {
+  estopped = v;
+  $('estopBtn').textContent = v ? '▶ START' : '■ STOP';
+  $('estopBtn').classList.toggle('resume', v);
+}
 $('estopBtn').onclick = async () => {
   $('estopBtn').blur();  // drop focus so Space/Enter can't re-trigger it
+  if (estopped) {
+    await post('/estop/reset', {});
+    setEstopped(false);
+    setMuted(false);
+    return;
+  }
   if (!confirm('Emergency stop: halt all motion and release the motors?')) return;
   await post('/estop', {});
-  $('estopBtn').textContent = '■ STOPPED';
+  setEstopped(true);
   setMuted(true);
 };
 $('muteBtn').onclick = () => {
@@ -677,6 +691,7 @@ async function refreshStatus() {
     syncTools(s.tools);
     syncAnimOptions(s.tools);
     if (s.muted !== muted) setMuted(s.muted);
+    if (s.estopped !== undefined && s.estopped !== estopped) setEstopped(s.estopped);
   } catch (e) { /* panel keeps trying */ }
 }
 

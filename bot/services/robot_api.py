@@ -40,9 +40,10 @@ _history: collections.deque = collections.deque(maxlen=200)
 _ws_queues: set = set()
 
 # Speaker-name registry (diarization): 0-based speaker tag -> known name.
-# Written by POST /speakers (panel or the NAT remember-speaker tool), read
-# by the pipeline's SpeakerLabelerProcessor (plain cross-thread dict read,
-# same pattern as _session).
+# CROSS-THREAD: written by POST /speakers (API loop) AND by the pipeline
+# thread (SpeakerLabelerProcessor auto-introductions); read from both.
+# Safe only because every access is a single-key get/set (atomic under
+# the GIL) — never iterate while another thread may mutate.
 _speaker_names: dict[int, str] = {}
 
 # Optional-tools registry: capabilities the NAT agent may use only when
@@ -54,6 +55,9 @@ _speaker_names: dict[int, str] = {}
 # function + config.yml wiring. Only ever touched from the API server's
 # event loop (NAT reads over HTTP; the pipeline never reads it), so no
 # cross-thread concern.
+# e-stop latch: /estop sets, /estop/reset clears; panel toggles on it
+ESTOP = {"active": False}
+
 _TOOLS_FILE = Path.home() / ".sparky" / "tools.json"
 OPTIONAL_TOOLS: dict[str, dict] = {
     "web_search": {
@@ -214,8 +218,15 @@ ANIMATION_AUDIO = os.getenv("ANIMATION_AUDIO", "sfx").strip().lower()
 _OUT_RATE = 24000
 
 
+_pcm_cache: dict[str, bytes] = {}
+
+
 def _load_wav_pcm24k(path: Path) -> bytes | None:
-    """Load a wav as 24kHz mono s16 PCM (numpy linear resample)."""
+    """Load a wav as 24kHz mono s16 PCM (numpy linear resample), cached —
+    a clip's sfx was re-decoded and resampled on every single play."""
+    cached = _pcm_cache.get(str(path))
+    if cached is not None:
+        return cached
     import wave
 
     import numpy as np
@@ -234,7 +245,9 @@ def _load_wav_pcm24k(path: Path) -> bytes | None:
             x_old = np.linspace(0.0, 1.0, len(samples), endpoint=False)
             x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
             samples = np.interp(x_new, x_old, samples.astype(np.float32)).astype(np.int16)
-        return samples.tobytes()
+        pcm = samples.tobytes()
+        _pcm_cache[str(path)] = pcm
+        return pcm
     except Exception as e:
         logger.warning(f"animation audio: could not load {path.name}: {e}")
         return None
@@ -493,6 +506,7 @@ def _build_app() -> FastAPI:
         return {
             "services": results,
             "robot_connected": service.connected,
+            "estopped": ESTOP["active"],
             "muted": bool(gate.muted) if gate else False,
             "audio": audio,
             "session_active": _session["task"] is not None,
@@ -693,7 +707,9 @@ def _build_app() -> FastAPI:
 
     @app.post("/estop")
     def estop():
-        """Emergency stop: halt motion, release torque, mute the mic."""
+        """Emergency stop: halt motion, release torque, mute the mic.
+        Reversible via POST /estop/reset."""
+        ESTOP["active"] = True
         results = {}
         # audible acknowledgment (output path keeps running; only the mic
         # and motors stop)
@@ -709,7 +725,9 @@ def _build_app() -> FastAPI:
             results["muted"] = str(e)
         try:
             if service.motion_manager:
-                service.motion_manager.stop()
+                # signal-only: never wait behind an in-flight motor RPC on
+                # the safety path (worker exits on its next 10ms tick)
+                service.motion_manager.stop(join=False)
             results["motion_stopped"] = True
         except Exception as e:
             results["motion_stopped"] = str(e)
@@ -726,6 +744,46 @@ def _build_app() -> FastAPI:
             results["torque_released"] = str(e)
         service.connected = False
         logger.warning(f"EMERGENCY STOP: {results}")
+        return {"ok": True, **results}
+
+    @app.post("/estop/reset")
+    def estop_reset():
+        """Reverse an e-stop: re-enable motors, restart the motion loop,
+        unmute. The motion worker thread exits on stop, so this re-wakes
+        the robot and spawns a fresh 100Hz worker (start() is
+        restart-safe: it clears the stop event and guards a live thread).
+        """
+        results = {}
+        try:
+            robot = service.robot
+            if robot is not None:
+                for meth in ("enable_motors", "wake_up"):
+                    fn = getattr(robot, meth, None)
+                    if fn:
+                        fn()
+                results["motors"] = "enabled"
+        except Exception as e:
+            results["motors"] = str(e)
+        try:
+            if service.motion_manager:
+                service.motion_manager.clear_pending()  # drop stale queued moves
+                service.motion_manager.start()
+            results["motion"] = "restarted"
+        except Exception as e:
+            results["motion"] = str(e)
+        try:
+            gate = _session["mic_gate"]
+            if gate:
+                gate.set_muted(False)
+            results["unmuted"] = True
+        except Exception as e:
+            results["unmuted"] = str(e)
+        service.connected = service.robot is not None
+        ESTOP["active"] = False
+        beep = _animation_audio_frames("beep", force=True)
+        if beep:
+            _queue_frames(beep)
+        logger.warning(f"E-STOP RESET: {results}")
         return {"ok": True, **results}
 
     @app.get("/health")

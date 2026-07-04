@@ -25,7 +25,12 @@ _ACTION_RE = re.compile(
     r"\b(nod|nods|nodding|dance|dancing|wiggle|antennas?|"
     r"look\s+(?:left|right|up|down|around)|"
     r"(?:shake|turn|move)\s+your\s+head|your\s+head|"
-    r"wake\s+up|go\s+to\s+sleep|take\s+a\s+(?:picture|photo))\b",
+    r"wake\s+up|go\s+to\s+sleep|take\s+a\s+(?:picture|photo)|"
+    # obvious live-lookup intents skip the router LLM round-trip entirely;
+    # the agent still decides which tool (web/wiki) to use
+    r"search\s+the\s+(?:web|internet)|look\s+(?:it|that|this)\s+up|"
+    r"(?:latest|today'?s?)\s+news|news\s+today|headlines?|"
+    r"weather|forecast|sports?\s+scores?)\b",
     re.IGNORECASE,
 )
 

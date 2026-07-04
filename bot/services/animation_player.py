@@ -242,16 +242,20 @@ class AnimationLibrary:
             except Exception as e:
                 logger.error(f"Failed to load animation '{clip_dir.name}': {e}")
         logger.info(f"Loaded {len(self._clips)} animations: {', '.join(sorted(self._clips))}")
+        # the library is immutable after load; precompute what /status and
+        # the panel would otherwise rebuild per request
+        self._names = sorted(self._clips)
+        self._catalog = [{"name": c.name, "category": c.category,
+                          "description": c.description,
+                          "duration": round(c.duration, 1)}
+                         for _, c in sorted(self._clips.items())]
 
     def names(self) -> list[str]:
-        return sorted(self._clips)
+        return self._names
 
     def catalog(self) -> list[dict]:
         """Panel browser metadata: name, category, description, duration."""
-        return [{"name": c.name, "category": c.category,
-                 "description": c.description,
-                 "duration": round(c.duration, 1)}
-                for _, c in sorted(self._clips.items())]
+        return self._catalog
 
     def get(self, name: str) -> AnimationClip | None:
         return self._clips.get(name)

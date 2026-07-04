@@ -64,15 +64,40 @@ def gate_active() -> bool:
     return GATE["muted"] or GATE["bot_speaking"] or time.monotonic() < GATE["tail_until"]
 
 
+# Cached zero-buffers for gate muting: frame sizes are constant per
+# stream, so reuse one immutable silence buffer instead of allocating
+# b"\x00" * len at ~10 frames/sec whenever the robot is speaking.
+_silence_cache: dict[int, bytes] = {}
+
+
+def silence(n: int) -> bytes:
+    buf = _silence_cache.get(n)
+    if buf is None:
+        buf = _silence_cache[n] = b"\x00" * n
+    return buf
+
+
+# Gain lookup table: mapping every possible int16 sample to its scaled
+# value turns per-write gain into a single vectorized np.take — the old
+# int16->int32->multiply->clip->int16 round-trip allocated 4x the buffer
+# inside the output stream lock on every write whenever volume != 100.
+_gain_lut = {"percent": 100, "table": None}
+
+
 def _apply_gain(data: bytes) -> bytes:
     pct = VOLUME["percent"]
     if pct == 100 or not data:
         return data
     import numpy as np
 
-    samples = np.frombuffer(data, dtype=np.int16).astype(np.int32)
-    samples = (samples * pct) // 100
-    return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+    if _gain_lut["percent"] != pct or _gain_lut["table"] is None:
+        idx = np.arange(-32768, 32768, dtype=np.int32)
+        _gain_lut["table"] = np.clip((idx * pct) // 100,
+                                     -32768, 32767).astype(np.int16)
+        _gain_lut["percent"] = pct
+    samples = np.frombuffer(data, dtype=np.int16)
+    # index shift: sample -32768 -> row 0
+    return _gain_lut["table"][samples.astype(np.int32) + 32768].tobytes()
 
 
 class ResilientAudioInput(LocalAudioInputTransport):
@@ -109,7 +134,7 @@ class ResilientAudioInput(LocalAudioInputTransport):
                     AUDIO_STATS["mic_max_gap_ms"] = gap_ms
         AUDIO_STATS["mic_last_frame_ts"] = now
         if gate_active():
-            data = b"\x00" * len(data)
+            data = silence(len(data))
         return data
 
     def _audio_in_callback(self, in_data, frame_count, time_info, status):

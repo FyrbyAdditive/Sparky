@@ -61,6 +61,12 @@ OPTIONAL_TOOLS: dict[str, dict] = {
         "description": "Let the assistant search the live internet and read web pages.",
         "enabled": os.getenv("WEB_SEARCH_ENABLED", "0").strip() == "1",
     },
+    "animation_sounds": {
+        "label": "Animation sounds",
+        "description": "Play the sound effects that ship with some animations.",
+        # default OFF: the bundled sfx grate quickly (Tim's call)
+        "enabled": os.getenv("ANIMATION_SOUNDS_ENABLED", "0").strip() == "1",
+    },
     "idle_animations": {
         "label": "Idle animations",
         "description": "Play a gentle animation now and then when Sparky is idle.",
@@ -221,12 +227,17 @@ def _load_wav_pcm24k(path: Path) -> bytes | None:
         return None
 
 
-def _animation_audio_frames(name: str) -> list:
+def _animation_audio_frames(name: str, force: bool = False) -> list:
     """OutputAudioRawFrames for an animation's audio, per ANIMATION_AUDIO mode.
     Played through the normal output path, so the software gain applies and
-    the bot-speaking gate keeps the mic from hearing the robot's own sfx."""
+    the bot-speaking gate keeps the mic from hearing the robot's own sfx.
+    Gated by the panel's Animation-sounds toggle (default off); force=True
+    bypasses it for the e-stop confirmation beep, which is a safety cue,
+    not an animation sound effect."""
     from pipecat.frames.frames import OutputAudioRawFrame
 
+    if not force and not OPTIONAL_TOOLS["animation_sounds"]["enabled"]:
+        return []
     if ANIMATION_AUDIO == "off":
         return []
     candidates = [ANIMATIONS_DIR / name / f"{name}_sfx.wav"]
@@ -666,7 +677,7 @@ def _build_app() -> FastAPI:
         results = {}
         # audible acknowledgment (output path keeps running; only the mic
         # and motors stop)
-        beep = _animation_audio_frames("beep")
+        beep = _animation_audio_frames("beep", force=True)
         if beep:
             _queue_frames(beep)
         try:

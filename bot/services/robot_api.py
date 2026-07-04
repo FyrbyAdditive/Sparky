@@ -719,7 +719,9 @@ def _build_app() -> FastAPI:
             results["muted"] = str(e)
         try:
             if service.motion_manager:
-                service.motion_manager.stop()
+                # signal-only: never wait behind an in-flight motor RPC on
+                # the safety path (worker exits on its next 10ms tick)
+                service.motion_manager.stop(join=False)
             results["motion_stopped"] = True
         except Exception as e:
             results["motion_stopped"] = str(e)

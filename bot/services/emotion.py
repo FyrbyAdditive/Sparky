@@ -68,6 +68,17 @@ def _softmax(x: np.ndarray) -> np.ndarray:
     return e / e.sum()
 
 
+def _single_thread_opts(ort):
+    """Pin ONNX to one intra-op thread: the default spawns a worker pool
+    that competes with the 100Hz motion thread and audio writes for the
+    GIL/cores exactly when a turn is busiest. ~5-15ms single-threaded is
+    plenty for a per-turn sentiment call."""
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    return opts
+
+
 class EmotionDetector:
     """CPU ONNX sentiment classifier with heuristic emotion mapping."""
 
@@ -86,7 +97,8 @@ class EmotionDetector:
             tokenizer_path = hf_hub_download(MODEL_REPO, "onnx/tokenizer.json")
 
             self._session = ort.InferenceSession(
-                model_path, providers=["CPUExecutionProvider"]
+                model_path, providers=["CPUExecutionProvider"],
+                sess_options=_single_thread_opts(ort),
             )
             self._tokenizer = Tokenizer.from_file(tokenizer_path)
             self._tokenizer.enable_truncation(max_length=128)

@@ -61,9 +61,8 @@ def _open_locked() -> bool:
 
 
 def _read_frame_locked():
-    """Read one downscaled BGR frame, or None. Lock held."""
-    import cv2
-
+    """Read one raw BGR frame, or None. Lock held — keep this minimal:
+    only the VideoCapture access itself; downscale happens outside."""
     global _capture
     if not _open_locked():
         return None
@@ -73,6 +72,14 @@ def _read_frame_locked():
         _capture.release()
         _capture = None
         return None
+    return frame_bgr
+
+
+def _downscale(frame_bgr):
+    """Downscale to the panel-selected resolution (AVFoundation ignores
+    cv2 capture-size requests, so this happens after read). Lock-free."""
+    import cv2
+
     wanted = _parse_resolution(CAMERA["resolution"])
     h, w = frame_bgr.shape[:2]
     if wanted and (w, h) != wanted and w > wanted[0]:
@@ -81,7 +88,12 @@ def _read_frame_locked():
 
 
 def grab_rgb():
-    """One-shot RGB grab for the vision path: (bytes, (w, h)) or None."""
+    """One-shot RGB grab for the vision path: (bytes, (w, h)) or None.
+
+    Only the VideoCapture handle needs mutual exclusion — pixel work
+    (convert/copy) happens outside the lock so the panel's MJPEG stream
+    isn't stalled behind a vision grab (and vice versa).
+    """
     import cv2
 
     with _lock:
@@ -90,21 +102,23 @@ def grab_rgb():
             for _ in range(2):
                 _capture.grab()
         frame_bgr = _read_frame_locked()
-        if frame_bgr is None:
-            return None
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        h, w = frame_rgb.shape[:2]
-        return frame_rgb.tobytes(), (w, h)
+    if frame_bgr is None:
+        return None
+    frame_bgr = _downscale(frame_bgr)
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    h, w = frame_rgb.shape[:2]
+    return frame_rgb.tobytes(), (w, h)
 
 
 def grab_jpeg(quality: int = 70):
     """One JPEG frame for the MJPEG stream, or None. Encodes straight from
-    BGR (no RGB round-trip)."""
+    BGR (no RGB round-trip); JPEG encode runs outside the capture lock."""
     import cv2
 
     with _lock:
         frame_bgr = _read_frame_locked()
-        if frame_bgr is None:
-            return None
-        ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        return buf.tobytes() if ok else None
+    if frame_bgr is None:
+        return None
+    frame_bgr = _downscale(frame_bgr)
+    ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return buf.tobytes() if ok else None

@@ -176,3 +176,129 @@ async def robot_look_at_fn(config: LookAtConfig, builder: Builder):
         )
     finally:
         await client.aclose()
+
+
+class TakePhotoConfig(FunctionBaseConfig, name="robot_take_photo"):
+    """Take and save a photo with the robot's camera."""
+    base_url: str = Field(default="http://localhost:7861",
+                          description="Robot API base URL")
+
+
+@register_function(config_type=TakePhotoConfig)
+async def robot_take_photo_fn(config: TakePhotoConfig, builder: Builder):
+    import httpx
+
+    base = config.base_url.rstrip("/")
+    client = httpx.AsyncClient(timeout=10.0)
+
+    async def _photo(query: str = "") -> str:
+        try:
+            r = await client.post(f"{base}/photo")
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            return f"I couldn't take a photo ({e})."
+        if not data.get("ok"):
+            return "The camera didn't cooperate — no photo this time."
+        return ("Taking the picture now — say cheese! It's saved as "
+                f"{data['file']} and viewable from the control panel.")
+
+    try:
+        yield FunctionInfo.from_fn(
+            _photo,
+            description=("Take a photo with the robot's camera (plays the "
+                         "photo animation and saves the picture). Use when "
+                         "someone asks to take a picture or photo. Input is "
+                         "ignored."),
+        )
+    finally:
+        await client.aclose()
+
+
+class RobotAdjustConfig(FunctionBaseConfig, name="robot_settings"):
+    """Adjust the robot's speaker volume or TTS voice by voice command."""
+    base_url: str = Field(default="http://localhost:7861",
+                          description="Robot API base URL")
+
+
+@register_function(config_type=RobotAdjustConfig)
+async def robot_adjust_fn(config: RobotAdjustConfig, builder: Builder):
+    import random
+    import re as _re
+
+    import httpx
+
+    base = config.base_url.rstrip("/")
+    client = httpx.AsyncClient(timeout=10.0)
+
+    _ACCENT = {"american": "a", "british": "b", "spanish": "e", "french": "f",
+               "hindi": "h", "indian": "h", "italian": "i", "japanese": "j",
+               "portuguese": "p", "chinese": "z"}
+
+    async def _adjust(command: str) -> str:
+        cmd = command.strip().lower()
+        try:
+            # ---- volume ----
+            if any(w in cmd for w in ("volume", "quieter", "louder", "quiet", "loud")):
+                r = await client.get(f"{base}/volume")
+                current = int(r.json().get("percent", 100))
+                m = _re.search(r"(\d{1,3})", cmd)
+                if m:
+                    target = int(m.group(1))
+                elif any(w in cmd for w in ("down", "quieter", "quiet", "lower", "softer")):
+                    target = current - 15
+                elif any(w in cmd for w in ("up", "louder", "loud", "higher")):
+                    target = current + 15
+                else:
+                    return f"The volume is at {current} percent."
+                target = max(0, min(120, target))
+                await client.post(f"{base}/volume", json={"percent": target})
+                return f"Volume is now {target} percent."
+
+            # ---- voice ----
+            if "voice" in cmd:
+                r = await client.get(f"{base}/voice")
+                data = r.json()
+                options = data.get("options", [])
+                query = cmd.replace("voice", " ").strip()
+                # exact id or name substring first
+                matches = [v for v in options if query and query in v]
+                if not matches:
+                    prefix = ""
+                    for word, letter in _ACCENT.items():
+                        if word in cmd:
+                            prefix = letter
+                            break
+                    gender = ("f" if _re.search(r"\b(female|woman)\b", cmd)
+                              else "m" if _re.search(r"\b(male|man)\b", cmd) else "")
+                    matches = [v for v in options
+                               if (not prefix or v.startswith(prefix))
+                               and (not gender or (len(v) > 1 and v[1] == gender))]
+                if not matches:
+                    return ("I couldn't match that to an installed voice. Try "
+                            "an accent and gender, like 'a British male voice'.")
+                choice = random.choice(matches)
+                res = await client.post(f"{base}/voice", json={"voice": choice})
+                if not res.json().get("ok"):
+                    return "That voice didn't take, sorry."
+                return f"Switched to the voice {choice.replace('_', ' ')}."
+
+            return ("I can adjust 'volume up/down', 'volume 60', or switch "
+                    "voice, like 'a British male voice'.")
+        except Exception as e:
+            return f"I couldn't adjust that ({e})."
+
+    try:
+        yield FunctionInfo.from_fn(
+            _adjust,
+            description=(
+                "Adjust the robot's own settings by request: speaker volume "
+                "('volume up', 'volume down', 'volume 60', 'quieter', "
+                "'louder') or speaking voice ('british male voice', "
+                "'american female voice', or a specific voice name). Use "
+                "whenever someone asks the robot to speak quieter/louder or "
+                "change its voice. Input is the plain request."
+            ),
+        )
+    finally:
+        await client.aclose()

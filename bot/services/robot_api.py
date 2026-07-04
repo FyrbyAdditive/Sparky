@@ -154,6 +154,14 @@ def get_speaker_name(tag: int) -> str | None:
     return _speaker_names.get(tag)
 
 
+def _reminders_state() -> list:
+    try:
+        from . import reminders
+        return reminders.listing()
+    except Exception:
+        return []
+
+
 def _director_status() -> dict:
     try:
         from .animation_director import get_director
@@ -368,6 +376,11 @@ class VoiceRequest(BaseModel):
     voice: str
 
 
+class ReminderRequest(BaseModel):
+    label: str
+    when: str  # "10m", "1h 30m", "90s", or "15:00"
+
+
 class LookAtRequest(BaseModel):
     direction: str
 
@@ -507,6 +520,7 @@ def _build_app() -> FastAPI:
             "services": results,
             "robot_connected": service.connected,
             "estopped": ESTOP["active"],
+            "reminders": _reminders_state(),
             "muted": bool(gate.muted) if gate else False,
             "audio": audio,
             "session_active": _session["task"] is not None,
@@ -565,6 +579,72 @@ def _build_app() -> FastAPI:
         VOICE["voice"] = value
         logger.info(f"TTS voice set to {value}")
         return {"ok": True, "voice": value, "options": options}
+
+    # --- timers & reminders ---
+
+    @app.get("/reminders")
+    def reminders_list():
+        from . import reminders
+        return {"ok": True, "reminders": reminders.listing()}
+
+    @app.post("/reminders")
+    def reminders_add(req: ReminderRequest):
+        from . import reminders
+        due = reminders.parse_when(req.when)
+        if due is None:
+            return {"ok": False, "error": "unparseable_time",
+                    "hint": "use like '10m', '1h 30m', '90s' or '15:00'"}
+        item = reminders.add(req.label, due)
+        return {"ok": True, "reminder": item,
+                "reminders": reminders.listing()}
+
+    @app.delete("/reminders/{query}")
+    def reminders_cancel(query: str):
+        from . import reminders
+        item = reminders.cancel(query)
+        if item is None:
+            return {"ok": False, "error": "not_found",
+                    "reminders": reminders.listing()}
+        return {"ok": True, "cancelled": item,
+                "reminders": reminders.listing()}
+
+    # --- photo capture ---
+
+    @app.post("/photo")
+    async def take_photo():
+        """takePicture animation + a JPEG saved at the clip's shutter
+        moment (~2.5s in). Returns the filename immediately; the snap
+        happens on this loop shortly after."""
+        from datetime import datetime as _dt
+
+        from .animation_director import get_director
+        from . import camera_service
+
+        photos = Path.home() / ".sparky" / "photos"
+        photos.mkdir(parents=True, exist_ok=True)
+        fname = photos / f"{_dt.now():%Y%m%d-%H%M%S}.jpg"
+        get_director().request("user", clip="takePicture")
+
+        async def _snap():
+            await asyncio.sleep(2.5)
+            jpg = await asyncio.get_running_loop().run_in_executor(
+                None, camera_service.grab_jpeg, 90)
+            if jpg:
+                fname.write_bytes(jpg)
+                logger.info(f"photo saved: {fname.name} ({len(jpg)} bytes)")
+            else:
+                logger.warning("photo: camera returned no frame")
+
+        asyncio.get_running_loop().create_task(_snap())
+        return {"ok": True, "file": fname.name}
+
+    @app.get("/photo/latest")
+    def photo_latest():
+        photos = Path.home() / ".sparky" / "photos"
+        files = sorted(photos.glob("*.jpg")) if photos.is_dir() else []
+        if not files:
+            return {"ok": False, "error": "no_photos"}
+        return FileResponse(files[-1], media_type="image/jpeg")
 
     # --- camera capture settings + live stream ---
 
@@ -815,6 +895,25 @@ def start_robot_api():
         server = uvicorn.Server(config)
         from .animation_director import get_director
         loop.create_task(get_director().tick_task())
+
+        from . import reminders as _rem
+        from pipecat.frames.frames import TTSSpeakFrame as _TTSSpeak
+
+        def _r_speak(text):
+            tts, ploop = _session["tts"], _session["loop"]
+            if tts is not None and ploop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    tts.queue_frame(_TTSSpeak(text)), ploop)
+
+        def _r_chime():
+            beep = _animation_audio_frames("beep", force=True)
+            if beep:
+                _queue_frames(beep)
+
+        def _r_wiggle():
+            get_director().request("user", clip="antennaLargeWiggle")
+
+        loop.create_task(_rem.scheduler(_r_speak, _r_chime, _r_wiggle))
         loop.run_until_complete(server.serve())
 
     threading.Thread(target=_serve, daemon=True, name="robot-api").start()

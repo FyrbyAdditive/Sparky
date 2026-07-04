@@ -258,6 +258,9 @@
       <div class="secBody">
         <img id="camFeed" alt="camera feed">
         <select id="camRes"></select>
+        <button id="photoBtn" style="width:100%;margin-top:8px"
+                title="Play the photo animation and save a picture to ~/.sparky/photos"
+                onclick="post('/photo', {}).then(r => r.ok && setTimeout(() => window.open('photo/latest'), 3200))">📸 Take photo</button>
       </div>
     </details>
     <details class="sec" id="sec-look" open>
@@ -280,6 +283,10 @@
         <input id="animFilter" type="text" placeholder="Filter 117 animations…">
         <div id="anims"></div>
       </div>
+    </details>
+    <details class="sec" id="sec-reminders">
+      <summary>Reminders</summary>
+      <div class="secBody"><div id="reminderList"></div></div>
     </details>
     <details class="sec" id="sec-speakers">
       <summary>Speakers</summary>
@@ -515,6 +522,41 @@ function syncSpeakers(speakers) {
   });
 }
 
+/* ---------- reminders ---------- */
+function fmtRemaining(secs) {
+  if (secs >= 3600) return Math.floor(secs/3600) + 'h ' + Math.round((secs%3600)/60) + 'm';
+  if (secs >= 60) return Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+  return secs + 's';
+}
+function syncReminders(items) {
+  const list = $('reminderList');
+  list.innerHTML = '';
+  if (!items || !items.length) {
+    const d = document.createElement('div');
+    d.className = 'spkEmpty';
+    d.textContent = 'No reminders — ask Sparky to set a timer.';
+    list.appendChild(d);
+    return;
+  }
+  items.forEach(r => {
+    const row = document.createElement('div');
+    row.className = 'spkRow';
+    const label = document.createElement('span');
+    label.innerHTML = '<span class="name"></span> <span style="color:var(--dim)"></span>';
+    label.querySelector('.name').textContent = r.label;
+    label.querySelectorAll('span')[1].textContent = '· in ' + fmtRemaining(r.remaining_secs);
+    const btn = document.createElement('button');
+    btn.textContent = 'cancel';
+    btn.onclick = async () => {
+      await fetch('reminders/' + encodeURIComponent(r.id), {method: 'DELETE'});
+      refreshStatus();
+    };
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
 /* ---------- optional tools (agent capabilities, toggled server-side) ---------- */
 // animation-related features render under Animations > Options instead of
 // the Tools & features list
@@ -690,6 +732,7 @@ async function refreshStatus() {
     syncSpeakers(s.speakers);
     syncTools(s.tools);
     syncAnimOptions(s.tools);
+    syncReminders(s.reminders);
     if (s.muted !== muted) setMuted(s.muted);
     if (s.estopped !== undefined && s.estopped !== estopped) setEstopped(s.estopped);
   } catch (e) { /* panel keeps trying */ }

@@ -67,6 +67,11 @@ OPTIONAL_TOOLS: dict[str, dict] = {
         # default OFF: the bundled sfx grate quickly (Tim's call)
         "enabled": os.getenv("ANIMATION_SOUNDS_ENABLED", "0").strip() == "1",
     },
+    "speaking_animations": {
+        "label": "Speaking animations",
+        "description": "Keep gently animating while Sparky talks through longer replies.",
+        "enabled": os.getenv("SPEAKING_ANIMATIONS_ENABLED", "1").strip() != "0",
+    },
     "idle_animations": {
         "label": "Idle animations",
         "description": "Play a gentle animation now and then when Sparky is idle.",
@@ -474,6 +479,7 @@ def _build_app() -> FastAPI:
                 # gate visibility: a robot that hears nothing while 'unmuted'
                 # was undiagnosable without this
                 audio["speech_gated"] = bool(GATE["bot_speaking"])
+                audio["speaking_anim_plays"] = SPEAK_ANIM["plays"]
                 audio["gate_muted"] = bool(GATE["muted"])
         except Exception:
             audio = {}
@@ -776,6 +782,59 @@ async def _idle_animation_scheduler():
             logger.warning(f"idle animation scheduler: {e}")
 
 
+# Clips authored for talking; one is chosen per reply and repeated until
+# the speech ends ("talking" also picks up random mirroring for variety).
+_SPEAKING_CLIPS = ["talking", "talkingLeftShoulder", "talkingRightShoulder"]
+SPEAK_ANIM = {"plays": 0}  # /status observability
+
+
+async def _speaking_animation_loop():
+    """Keep the robot moving through long spoken replies.
+
+    A reply's opening animation (agent tool or emotion reaction) lasts a
+    few seconds; a lengthy answer then goes motion-still apart from the
+    speech sway. Once the bot has been speaking continuously past a short
+    grace period, pick one talking clip for this reply and re-queue it
+    (with a small pause) until the speech ends. Brief stillness between
+    repeats is intentional.
+    """
+    import random
+
+    from .local_audio import GATE
+
+    service = ReachyService.get_instance()
+    grace = float(os.getenv("SPEAKING_ANIM_GRACE_SECS", "3.0"))
+    speaking_since = None
+    reply_clip = None
+    busy_until = 0.0
+    while True:
+        await asyncio.sleep(1.0)
+        try:
+            if (not OPTIONAL_TOOLS["speaking_animations"]["enabled"]
+                    or not service.connected):
+                speaking_since = reply_clip = None
+                continue
+            now = _time_mod.monotonic()
+            if not GATE["bot_speaking"]:
+                speaking_since = reply_clip = None
+                continue
+            if speaking_since is None:
+                speaking_since = now
+            if now - speaking_since < grace or now < busy_until:
+                continue
+            if reply_clip is None:
+                avail = [c for c in _SPEAKING_CLIPS if service.animations.get(c)]
+                if not avail:
+                    continue
+                reply_clip = random.choice(avail)
+            if service.play_animation(reply_clip):
+                SPEAK_ANIM["plays"] += 1
+                duration = service.animations.get(reply_clip).duration
+                busy_until = now + duration + random.uniform(0.4, 1.2)
+        except Exception as e:
+            logger.warning(f"speaking animation loop: {e}")
+
+
 def start_robot_api():
     """Start the panel/API server once, in a background daemon thread."""
     global _started
@@ -797,6 +856,7 @@ def start_robot_api():
         config = uvicorn.Config(_build_app(), host=host, port=port, log_level="warning", loop="asyncio")
         server = uvicorn.Server(config)
         loop.create_task(_idle_animation_scheduler())
+        loop.create_task(_speaking_animation_loop())
         loop.run_until_complete(server.serve())
 
     threading.Thread(target=_serve, daemon=True, name="robot-api").start()

@@ -150,6 +150,14 @@ def get_speaker_name(tag: int) -> str | None:
     return _speaker_names.get(tag)
 
 
+def _director_status() -> dict:
+    try:
+        from .animation_director import get_director
+        return get_director().status()
+    except Exception:
+        return {}
+
+
 def _camera_state() -> dict:
     try:
         from .camera_service import CAMERA, CAMERA_RESOLUTIONS
@@ -479,7 +487,6 @@ def _build_app() -> FastAPI:
                 # gate visibility: a robot that hears nothing while 'unmuted'
                 # was undiagnosable without this
                 audio["speech_gated"] = bool(GATE["bot_speaking"])
-                audio["speaking_anim_plays"] = SPEAK_ANIM["plays"]
                 audio["gate_muted"] = bool(GATE["muted"])
         except Exception:
             audio = {}
@@ -492,6 +499,7 @@ def _build_app() -> FastAPI:
             "speakers": {str(t + 1): n for t, n in sorted(_speaker_names.items())},
             "tools": OPTIONAL_TOOLS,
             "camera": _camera_state(),
+            "animation": _director_status(),
             "voice": {"voice": VOICE["voice"],
                       "options": await _kokoro_voices()},
             "models": {
@@ -657,16 +665,22 @@ def _build_app() -> FastAPI:
 
     @app.post("/robot/play_animation")
     def play_animation(req: PlayAnimationRequest):
+        from .animation_director import get_director
+
         if service.animations.get(req.name) is None:
+            # exact shape the NAT tool parses to self-correct with the list
             return {"ok": False, "error": "unknown_animation", "animations": service.list_animations()}
         if not service.connected:
             return {"ok": False, "error": "robot_not_connected"}
-        ok = service.play_animation(req.name, mirror=req.mirror)
-        if ok:
+        res = get_director().request("user", clip=req.name, mirror=req.mirror)
+        if res["accepted"]:
+            # a panel/agent play is user activity: hold the idle stillness
+            # clock like a conversation line would
+            LAST_INTERACTION["ts"] = _time_mod.monotonic()
             audio_frames = _animation_audio_frames(req.name)
             if audio_frames:
                 _queue_frames(audio_frames)
-        return {"ok": ok, "error": None if ok else "robot_error"}
+        return {"ok": res["accepted"], "error": res["reason"]}
 
     @app.post("/robot/look_at")
     def look_at(req: LookAtRequest):
@@ -721,120 +735,6 @@ def _build_app() -> FastAPI:
     return app
 
 
-# Gentle clips for idle motion; filtered against the loaded library on
-# first use (the emotion map uses the same guard idiom).
-_IDLE_CLIP_CANDIDATES = [
-    "attentive", "lookAroundShort", "antennaSmallWiggle", "idle3old",
-    "listen1", "thoughtful1", "thoughtful2", "curious1", "boredom1",
-    "boredom2", "serenity1", "calming1",
-]
-_idle_clips_cache: list[str] | None = None
-
-
-async def _idle_animation_scheduler():
-    """Play a gentle animation now and then while the robot is idle.
-
-    Idle = no transcript activity for still_secs AND the bot isn't
-    speaking. Between idle plays, a random gap re-rolled from
-    [min_gap_secs, max_gap_secs]; any conversation resets the stillness
-    clock via push_transcript. Plays go through service.play_animation
-    directly, so they are silent (animation audio only rides the HTTP
-    endpoint) and pick up random mirroring. Panel toggle + settings apply
-    on the next 5s tick.
-    """
-    import random
-
-    from .local_audio import GATE
-
-    global _idle_clips_cache
-    service = ReachyService.get_instance()
-    last_play = _time_mod.monotonic()
-    next_gap = 0.0
-    while True:
-        await asyncio.sleep(5.0)
-        try:
-            tool = OPTIONAL_TOOLS["idle_animations"]
-            if not tool["enabled"] or not service.connected:
-                continue
-            if GATE["bot_speaking"]:
-                continue
-            now = _time_mod.monotonic()
-            if now - LAST_INTERACTION["ts"] < tool_param("idle_animations", "still_secs"):
-                continue
-            if next_gap == 0.0:
-                next_gap = random.uniform(
-                    tool_param("idle_animations", "min_gap_secs"),
-                    tool_param("idle_animations", "max_gap_secs"))
-            if now - last_play < next_gap:
-                continue
-            if _idle_clips_cache is None:
-                _idle_clips_cache = [c for c in _IDLE_CLIP_CANDIDATES
-                                     if service.animations.get(c)]
-                logger.info(f"idle animations: pool of {len(_idle_clips_cache)} clips")
-            if not _idle_clips_cache:
-                continue
-            service.play_animation(random.choice(_idle_clips_cache))
-            last_play = now
-            next_gap = random.uniform(
-                tool_param("idle_animations", "min_gap_secs"),
-                tool_param("idle_animations", "max_gap_secs"))
-        except Exception as e:
-            logger.warning(f"idle animation scheduler: {e}")
-
-
-# Clips authored for talking; one is chosen per reply and repeated until
-# the speech ends ("talking" also picks up random mirroring for variety).
-_SPEAKING_CLIPS = ["talking", "talkingLeftShoulder", "talkingRightShoulder"]
-SPEAK_ANIM = {"plays": 0}  # /status observability
-
-
-async def _speaking_animation_loop():
-    """Keep the robot moving through long spoken replies.
-
-    A reply's opening animation (agent tool or emotion reaction) lasts a
-    few seconds; a lengthy answer then goes motion-still apart from the
-    speech sway. Once the bot has been speaking continuously past a short
-    grace period, pick one talking clip for this reply and re-queue it
-    (with a small pause) until the speech ends. Brief stillness between
-    repeats is intentional.
-    """
-    import random
-
-    from .local_audio import GATE
-
-    service = ReachyService.get_instance()
-    grace = float(os.getenv("SPEAKING_ANIM_GRACE_SECS", "3.0"))
-    speaking_since = None
-    reply_clip = None
-    busy_until = 0.0
-    while True:
-        await asyncio.sleep(1.0)
-        try:
-            if (not OPTIONAL_TOOLS["speaking_animations"]["enabled"]
-                    or not service.connected):
-                speaking_since = reply_clip = None
-                continue
-            now = _time_mod.monotonic()
-            if not GATE["bot_speaking"]:
-                speaking_since = reply_clip = None
-                continue
-            if speaking_since is None:
-                speaking_since = now
-            if now - speaking_since < grace or now < busy_until:
-                continue
-            if reply_clip is None:
-                avail = [c for c in _SPEAKING_CLIPS if service.animations.get(c)]
-                if not avail:
-                    continue
-                reply_clip = random.choice(avail)
-            if service.play_animation(reply_clip):
-                SPEAK_ANIM["plays"] += 1
-                duration = service.animations.get(reply_clip).duration
-                busy_until = now + duration + random.uniform(0.4, 1.2)
-        except Exception as e:
-            logger.warning(f"speaking animation loop: {e}")
-
-
 def start_robot_api():
     """Start the panel/API server once, in a background daemon thread."""
     global _started
@@ -855,8 +755,8 @@ def start_robot_api():
         _api_loop = loop
         config = uvicorn.Config(_build_app(), host=host, port=port, log_level="warning", loop="asyncio")
         server = uvicorn.Server(config)
-        loop.create_task(_idle_animation_scheduler())
-        loop.create_task(_speaking_animation_loop())
+        from .animation_director import get_director
+        loop.create_task(get_director().tick_task())
         loop.run_until_complete(server.serve())
 
     threading.Thread(target=_serve, daemon=True, name="robot-api").start()

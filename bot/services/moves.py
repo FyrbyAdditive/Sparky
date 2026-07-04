@@ -343,6 +343,15 @@ class MovementManager:
         """
         self._command_queue.put(("set_moving_state", duration))
 
+    def clear_pending(self) -> None:
+        """Drop queued-but-unstarted moves; the current move finishes.
+
+        The AnimationDirector's replace-pending arbitration needs exactly
+        this and nothing more (hard mid-move preemption stays out of
+        scope). Narrow successor to the deleted clear_move_queue.
+        """
+        self._command_queue.put(("clear_pending", None))
+
     def set_listening(self, listening: bool) -> None:
         """Enable or disable listening mode without touching shared state directly.
 
@@ -419,6 +428,9 @@ class MovementManager:
                 logger.warning("Invalid moving state duration: %s", payload)
                 return
             self.state.update_activity()
+        elif command == "clear_pending":
+            self.move_queue.clear()
+
         elif command == "mark_activity":
             self.state.update_activity()
         elif command == "set_listening":

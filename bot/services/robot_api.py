@@ -60,19 +60,48 @@ OPTIONAL_TOOLS: dict[str, dict] = {
         "description": "Let the assistant search the live internet and read web pages.",
         "enabled": os.getenv("WEB_SEARCH_ENABLED", "0").strip() == "1",
     },
+    "idle_animations": {
+        "label": "Idle animations",
+        "description": "Play a gentle animation now and then when Sparky is idle.",
+        "enabled": os.getenv("IDLE_ANIMATIONS_ENABLED", "1").strip() != "0",
+        # numeric settings rendered as inputs in the panel; values are
+        # clamped to [min, max] on write and persist alongside enabled
+        "params": {
+            "still_secs": {"label": "Still after activity", "unit": "s",
+                           "value": float(os.getenv("IDLE_ANIM_STILL_SECS", "60")),
+                           "min": 10, "max": 600},
+            "min_gap_secs": {"label": "Min gap", "unit": "s",
+                             "value": float(os.getenv("IDLE_ANIM_MIN_SECS", "45")),
+                             "min": 10, "max": 900},
+            "max_gap_secs": {"label": "Max gap", "unit": "s",
+                             "value": float(os.getenv("IDLE_ANIM_MAX_SECS", "120")),
+                             "min": 10, "max": 1800},
+        },
+    },
 }
 
 
 def _load_tool_states():
-    """Overlay persisted enabled-bits onto the code-seeded catalog.
+    """Overlay persisted state onto the code-seeded catalog. Values are
+    either a bare bool (legacy) or {"enabled": bool, "params": {k: num}}.
     Missing/corrupt file must never break the bot."""
     try:
         import json
 
         saved = json.loads(_TOOLS_FILE.read_text())
-        for name, enabled in saved.items():
-            if name in OPTIONAL_TOOLS and isinstance(enabled, bool):
-                OPTIONAL_TOOLS[name]["enabled"] = enabled
+        for name, state in saved.items():
+            tool = OPTIONAL_TOOLS.get(name)
+            if tool is None:
+                continue
+            if isinstance(state, bool):
+                tool["enabled"] = state
+            elif isinstance(state, dict):
+                if isinstance(state.get("enabled"), bool):
+                    tool["enabled"] = state["enabled"]
+                for k, v in (state.get("params") or {}).items():
+                    p = tool.get("params", {}).get(k)
+                    if p is not None and isinstance(v, (int, float)):
+                        p["value"] = max(p["min"], min(p["max"], float(v)))
     except Exception:
         pass
 
@@ -82,12 +111,23 @@ def _save_tool_states():
         import json
 
         _TOOLS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        state = {}
+        for n, t in OPTIONAL_TOOLS.items():
+            if t.get("params"):
+                state[n] = {"enabled": t["enabled"],
+                            "params": {k: p["value"] for k, p in t["params"].items()}}
+            else:
+                state[n] = t["enabled"]
         tmp = _TOOLS_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(
-            {n: t["enabled"] for n, t in OPTIONAL_TOOLS.items()}, indent=1))
+        tmp.write_text(json.dumps(state, indent=1))
         os.replace(tmp, _TOOLS_FILE)
     except Exception as e:
         logger.warning(f"tools registry: could not persist state: {e}")
+
+
+def tool_param(name: str, key: str) -> float:
+    """Live numeric setting for an optional feature (scheduler-side read)."""
+    return float(OPTIONAL_TOOLS[name]["params"][key]["value"])
 
 
 _load_tool_states()
@@ -211,8 +251,16 @@ def attach_session(loop, task, messages, mic_gate):
     logger.info("Control panel: session attached")
 
 
+# Idle-animation clock: monotonic timestamp of the last conversational
+# activity (any transcript line: user final, typed turn, assistant reply).
+import time as _time_mod
+
+LAST_INTERACTION = {"ts": _time_mod.monotonic()}
+
+
 def push_transcript(item: dict):
     """Thread-safe transcript push (called from the pipeline loop)."""
+    LAST_INTERACTION["ts"] = _time_mod.monotonic()
     if _api_loop is None:
         return
     _api_loop.call_soon_threadsafe(_broadcast, item)
@@ -269,6 +317,8 @@ class SpeakerNameRequest(BaseModel):
 class OptionalToolRequest(BaseModel):
     name: str
     enabled: bool
+    # optional numeric settings {key: value}, clamped server-side
+    params: dict[str, float] | None = None
 
 
 class CameraRequest(BaseModel):
@@ -518,7 +568,17 @@ def _build_app() -> FastAPI:
     def set_tool(req: OptionalToolRequest):
         if req.name not in OPTIONAL_TOOLS:
             return {"ok": False, "error": "unknown_tool"}
-        OPTIONAL_TOOLS[req.name]["enabled"] = req.enabled
+        tool = OPTIONAL_TOOLS[req.name]
+        tool["enabled"] = req.enabled
+        for k, v in (req.params or {}).items():
+            p = tool.get("params", {}).get(k)
+            if p is not None:
+                p["value"] = max(p["min"], min(p["max"], float(v)))
+        # a gap window must stay ordered
+        params = tool.get("params", {})
+        if "min_gap_secs" in params and "max_gap_secs" in params:
+            if params["max_gap_secs"]["value"] < params["min_gap_secs"]["value"]:
+                params["max_gap_secs"]["value"] = params["min_gap_secs"]["value"]
         _save_tool_states()
         logger.info(f"Optional tool '{req.name}' "
                     f"{'enabled' if req.enabled else 'disabled'}")
@@ -633,6 +693,67 @@ def _build_app() -> FastAPI:
     return app
 
 
+# Gentle clips for idle motion; filtered against the loaded library on
+# first use (the emotion map uses the same guard idiom).
+_IDLE_CLIP_CANDIDATES = [
+    "attentive", "lookAroundShort", "antennaSmallWiggle", "idle3old",
+    "listen1", "thoughtful1", "thoughtful2", "curious1", "boredom1",
+    "boredom2", "serenity1", "calming1",
+]
+_idle_clips_cache: list[str] | None = None
+
+
+async def _idle_animation_scheduler():
+    """Play a gentle animation now and then while the robot is idle.
+
+    Idle = no transcript activity for still_secs AND the bot isn't
+    speaking. Between idle plays, a random gap re-rolled from
+    [min_gap_secs, max_gap_secs]; any conversation resets the stillness
+    clock via push_transcript. Plays go through service.play_animation
+    directly, so they are silent (animation audio only rides the HTTP
+    endpoint) and pick up random mirroring. Panel toggle + settings apply
+    on the next 5s tick.
+    """
+    import random
+
+    from .local_audio import GATE
+
+    global _idle_clips_cache
+    service = ReachyService.get_instance()
+    last_play = _time_mod.monotonic()
+    next_gap = 0.0
+    while True:
+        await asyncio.sleep(5.0)
+        try:
+            tool = OPTIONAL_TOOLS["idle_animations"]
+            if not tool["enabled"] or not service.connected:
+                continue
+            if GATE["bot_speaking"]:
+                continue
+            now = _time_mod.monotonic()
+            if now - LAST_INTERACTION["ts"] < tool_param("idle_animations", "still_secs"):
+                continue
+            if next_gap == 0.0:
+                next_gap = random.uniform(
+                    tool_param("idle_animations", "min_gap_secs"),
+                    tool_param("idle_animations", "max_gap_secs"))
+            if now - last_play < next_gap:
+                continue
+            if _idle_clips_cache is None:
+                _idle_clips_cache = [c for c in _IDLE_CLIP_CANDIDATES
+                                     if service.animations.get(c)]
+                logger.info(f"idle animations: pool of {len(_idle_clips_cache)} clips")
+            if not _idle_clips_cache:
+                continue
+            service.play_animation(random.choice(_idle_clips_cache))
+            last_play = now
+            next_gap = random.uniform(
+                tool_param("idle_animations", "min_gap_secs"),
+                tool_param("idle_animations", "max_gap_secs"))
+        except Exception as e:
+            logger.warning(f"idle animation scheduler: {e}")
+
+
 def start_robot_api():
     """Start the panel/API server once, in a background daemon thread."""
     global _started
@@ -653,6 +774,7 @@ def start_robot_api():
         _api_loop = loop
         config = uvicorn.Config(_build_app(), host=host, port=port, log_level="warning", loop="asyncio")
         server = uvicorn.Server(config)
+        loop.create_task(_idle_animation_scheduler())
         loop.run_until_complete(server.serve())
 
     threading.Thread(target=_serve, daemon=True, name="robot-api").start()

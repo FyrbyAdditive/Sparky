@@ -43,6 +43,87 @@ GATE_UNREACHABLE_MSG = (
     "offline. Do not call this tool again for this request."
 )
 
+# --- spoken narration -------------------------------------------------
+# The robot goes silent for seconds while a search runs; announce what is
+# happening through the bot's verbatim-TTS endpoint. random.choice from a
+# big pool reads as fresh every time at zero cost (no LLM call). One
+# announcement per burst (a ReAct turn can fire several tool calls).
+ANNOUNCE_COOLDOWN_SECS = 20.0
+_announce_state = {"last_ts": 0.0, "last_phrase": ""}
+
+_ANNOUNCE_WEB = [
+    "Let me check the web for that.",
+    "Searching the internet, one moment.",
+    "I'll look that up online.",
+    "Give me a second to search the web.",
+    "Let me see what the internet says.",
+    "Checking online for you.",
+    "One moment, searching the web.",
+    "Time to surf the web.",
+    "Casting a net into the internet.",
+    "Let me ask the internet.",
+    "Off to the web I go.",
+    "Consulting the world wide web.",
+    "Running a quick web search.",
+    "Let me dig around online.",
+    "I'll find that on the web.",
+    "Searching the net for answers.",
+    "Give me a moment online.",
+    "Let me look into that on the internet.",
+    "Peeking at the web now.",
+    "Firing up a web search.",
+    "The internet should know this.",
+    "Hold on, browsing the web.",
+    "Let me fetch that from the internet.",
+    "Scanning the web for you.",
+    "A quick look online, one second.",
+    "Hunting that down on the web.",
+    "Let me pull up some results.",
+    "Rummaging through the internet.",
+    "I'll see what's out there online.",
+    "Checking the latest on the web.",
+]
+
+_ANNOUNCE_READ = [
+    "Opening one of the results.",
+    "Reading that page now.",
+    "Let me read this article.",
+    "Having a closer look at this page.",
+    "Skimming through the page.",
+    "Reading the details now.",
+    "Let me open that link.",
+    "Digging into this result.",
+    "One moment, reading the page.",
+    "Taking a closer look online.",
+    "Loading up the full story.",
+    "Let me read a bit more about this.",
+    "Scanning the article.",
+    "Checking the source directly.",
+    "Reading the fine print.",
+]
+
+
+async def _announce(client, robot_api_base_url: str, pool: list[str]):
+    """Fire-and-forget spoken status via the bot's /speak. Never raises,
+    never blocks the search meaningfully; cooldown keeps a multi-call
+    agent turn to a single announcement."""
+    import random
+    import time
+
+    now = time.monotonic()
+    if now - _announce_state["last_ts"] < ANNOUNCE_COOLDOWN_SECS:
+        return
+    _announce_state["last_ts"] = now
+    choices = [p for p in pool if p != _announce_state["last_phrase"]] or pool
+    phrase = random.choice(choices)
+    _announce_state["last_phrase"] = phrase
+    try:
+        await client.post(f"{robot_api_base_url.rstrip('/')}/speak",
+                          json={"text": phrase}, timeout=2.0)
+    except Exception as e:
+        logger.debug(f"announce failed (non-fatal): {e}")
+
+
 # DDG's HTML endpoint serves a bot-check page to clients without a
 # plausible browser User-Agent.
 _HEADERS = {
@@ -209,6 +290,7 @@ async def web_search_fn(config: WebSearchConfig, builder: Builder):
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
+        await _announce(client, config.robot_api_base_url, _ANNOUNCE_WEB)
         await _polite_slot()
 
         results = []
@@ -283,6 +365,7 @@ async def web_read_page_fn(config: WebReadPageConfig, builder: Builder):
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
+        await _announce(client, config.robot_api_base_url, _ANNOUNCE_READ)
         await _polite_slot()
 
         try:

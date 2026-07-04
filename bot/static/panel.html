@@ -197,6 +197,13 @@
   .spkEmpty { color: var(--dim); font-size: 13px; padding: 2px 1px; }
 
   #toolList { display: flex; flex-direction: column; gap: 6px; }
+  .toolParams { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+  .toolParams label { display: flex; align-items: center; gap: 5px;
+                      font-size: 12px; color: var(--dim); }
+  .toolParams input { width: 58px; background: var(--card); border: 1px solid var(--line);
+                      color: var(--text); border-radius: 6px; padding: 4px 6px;
+                      font-size: 12.5px; font-family: inherit; }
+  .toolParams input:focus { outline: none; border-color: var(--accent); }
   .toolRow input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; flex: none; }
   .toolRow .desc { color: var(--dim); font-size: 12px; font-weight: 400; }
 
@@ -274,7 +281,7 @@
       <div class="secBody"><select id="voiceSel"></select></div>
     </details>
     <details class="sec" id="sec-tools">
-      <summary>Tools</summary>
+      <summary>Tools &amp; features</summary>
       <div class="secBody"><div id="toolList"></div></div>
     </details>
     <details class="sec" id="sec-services">
@@ -517,7 +524,7 @@ function syncTools(tools) {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = !!t.enabled;
-    cb.title = 'Takes effect on the next question — no restart needed';
+    cb.title = 'Takes effect within seconds — no restart needed';
     cb.onchange = async () => {
       const r = await post('/tools', {name, enabled: cb.checked});
       if (r.tools) syncTools(r.tools); else cb.checked = !cb.checked;
@@ -525,6 +532,31 @@ function syncTools(tools) {
     row.appendChild(label);
     row.appendChild(cb);
     list.appendChild(row);
+    if (t.params && Object.keys(t.params).length) {
+      const pRow = document.createElement('div');
+      pRow.className = 'toolParams';
+      let pTimer = null;
+      Object.entries(t.params).forEach(([key, p]) => {
+        const lab = document.createElement('label');
+        lab.textContent = p.label + (p.unit ? ` (${p.unit})` : '');
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.min = p.min; inp.max = p.max; inp.value = p.value;
+        inp.oninput = () => {
+          clearTimeout(pTimer);
+          pTimer = setTimeout(async () => {
+            const params = {};
+            pRow.querySelectorAll('input').forEach((el, i) =>
+              params[Object.keys(t.params)[i]] = parseFloat(el.value) || 0);
+            const r = await post('/tools', {name, enabled: cb.checked, params});
+            if (r.tools) syncTools(r.tools);
+          }, 600);
+        };
+        lab.appendChild(inp);
+        pRow.appendChild(lab);
+      });
+      list.appendChild(pRow);
+    }
   });
 }
 

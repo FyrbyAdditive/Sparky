@@ -23,7 +23,36 @@ class WikiSearchOfflineConfig(FunctionBaseConfig, name="wiki_search_offline"):
         default="http://localhost:8040",
         description="Base URL of the wiki-offline service",
     )
+    robot_api_base_url: str = Field(
+        default="http://localhost:7861",
+        description="Robot API base URL (spoken search narration)",
+    )
     max_results: int = Field(default=2, description="Number of articles to return")
+
+
+# Spoken narration while the lookup runs (see web_search._announce).
+_ANNOUNCE_WIKI = [
+    "Let me check Wikipedia.",
+    "Consulting my encyclopedia.",
+    "Flipping through Wikipedia.",
+    "One moment, checking Wikipedia.",
+    "Let me look that up in the encyclopedia.",
+    "Checking my knowledge base.",
+    "Wikipedia should know this.",
+    "Paging through the encyclopedia.",
+    "Let me consult the archives.",
+    "Looking through Wikipedia now.",
+    "A quick encyclopedia check.",
+    "Let me verify that in Wikipedia.",
+    "Searching my offline library.",
+    "Digging into the encyclopedia.",
+    "Give me a second with Wikipedia.",
+    "Thumbing through my reference books.",
+    "The encyclopedia will settle this.",
+    "Checking the facts in Wikipedia.",
+    "Let me pull up the article.",
+    "Consulting the collected knowledge.",
+]
 
 
 @register_function(config_type=WikiSearchOfflineConfig)
@@ -35,6 +64,9 @@ async def wiki_search_offline_fn(config: WikiSearchOfflineConfig, builder: Build
     client = httpx.AsyncClient(timeout=30.0)
 
     async def _search(query: str) -> str:
+        from ces_tutorial.functions.web_search import _announce
+
+        await _announce(client, config.robot_api_base_url, _ANNOUNCE_WIKI)
         try:
             response = await client.get(
                 f"{base_url}/search",

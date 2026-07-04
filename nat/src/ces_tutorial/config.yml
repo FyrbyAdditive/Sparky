@@ -13,6 +13,7 @@ functions:
    wikipedia_search:
       _type: wiki_search_offline
       base_url: ${WIKI_BASE_URL:-http://localhost:8040}
+      robot_api_base_url: ${ROBOT_API_BASE_URL:-http://localhost:7861}
       max_results: 2
 
    play_animation:

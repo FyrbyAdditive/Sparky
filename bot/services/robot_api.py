@@ -55,6 +55,9 @@ _speaker_names: dict[int, str] = {}
 # function + config.yml wiring. Only ever touched from the API server's
 # event loop (NAT reads over HTTP; the pipeline never reads it), so no
 # cross-thread concern.
+# e-stop latch: /estop sets, /estop/reset clears; panel toggles on it
+ESTOP = {"active": False}
+
 _TOOLS_FILE = Path.home() / ".sparky" / "tools.json"
 OPTIONAL_TOOLS: dict[str, dict] = {
     "web_search": {
@@ -503,6 +506,7 @@ def _build_app() -> FastAPI:
         return {
             "services": results,
             "robot_connected": service.connected,
+            "estopped": ESTOP["active"],
             "muted": bool(gate.muted) if gate else False,
             "audio": audio,
             "session_active": _session["task"] is not None,
@@ -703,7 +707,9 @@ def _build_app() -> FastAPI:
 
     @app.post("/estop")
     def estop():
-        """Emergency stop: halt motion, release torque, mute the mic."""
+        """Emergency stop: halt motion, release torque, mute the mic.
+        Reversible via POST /estop/reset."""
+        ESTOP["active"] = True
         results = {}
         # audible acknowledgment (output path keeps running; only the mic
         # and motors stop)
@@ -738,6 +744,46 @@ def _build_app() -> FastAPI:
             results["torque_released"] = str(e)
         service.connected = False
         logger.warning(f"EMERGENCY STOP: {results}")
+        return {"ok": True, **results}
+
+    @app.post("/estop/reset")
+    def estop_reset():
+        """Reverse an e-stop: re-enable motors, restart the motion loop,
+        unmute. The motion worker thread exits on stop, so this re-wakes
+        the robot and spawns a fresh 100Hz worker (start() is
+        restart-safe: it clears the stop event and guards a live thread).
+        """
+        results = {}
+        try:
+            robot = service.robot
+            if robot is not None:
+                for meth in ("enable_motors", "wake_up"):
+                    fn = getattr(robot, meth, None)
+                    if fn:
+                        fn()
+                results["motors"] = "enabled"
+        except Exception as e:
+            results["motors"] = str(e)
+        try:
+            if service.motion_manager:
+                service.motion_manager.clear_pending()  # drop stale queued moves
+                service.motion_manager.start()
+            results["motion"] = "restarted"
+        except Exception as e:
+            results["motion"] = str(e)
+        try:
+            gate = _session["mic_gate"]
+            if gate:
+                gate.set_muted(False)
+            results["unmuted"] = True
+        except Exception as e:
+            results["unmuted"] = str(e)
+        service.connected = service.robot is not None
+        ESTOP["active"] = False
+        beep = _animation_audio_frames("beep", force=True)
+        if beep:
+            _queue_frames(beep)
+        logger.warning(f"E-STOP RESET: {results}")
         return {"ok": True, **results}
 
     @app.get("/health")

@@ -4,21 +4,29 @@ A real-time voice + vision AI assistant controlling a **Reachy Mini** robot, run
 **entirely on local hardware** — no cloud APIs, no API keys at runtime. Forked from
 [brevdev/reachy-personal-assistant](https://github.com/brevdev/reachy-personal-assistant)
 with every cloud service replaced by a local equivalent on **two NVIDIA DGX Sparks**
-("magi" = speech + routing, "shodan" = inference), linked by a 200GbE ConnectX-7
-interconnect:
+("magi" = speech + search, "shodan" = all LLM inference including routing), linked
+by a 200GbE ConnectX-7 interconnect:
 
-| Capability | Original (cloud) | This platform (local) |
+| Capability | Upstream | This platform (local) |
 |---|---|---|
-| Speech-to-text + diarization | ElevenLabs API | Nemotron 3.5 streaming ASR NIM + sortformer speaker diarization (magi) |
-| Text-to-speech | ElevenLabs API | Kokoro-82M (Kokoro-FastAPI, magi) |
-| Agent / chat / vision LLM | NVIDIA cloud (three models) | One multimodal Qwen3.6-35B-A3B NVFP4 + MTP, vLLM (shodan) |
-| Intent router | NVIDIA cloud (`phi-3-mini`) | Same model, vLLM (magi, plus deterministic pre-routes) |
-| Wikipedia tool | wikipedia.org | Offline txtai semantic index (~9GB, shodan) |
+| Speech-to-text + diarization | ElevenLabs\* | Nemotron 3.5 streaming ASR NIM + sortformer speaker diarization (magi) |
+| Text-to-speech | ElevenLabs\* | Kokoro-82M, 67 voices selectable at runtime (Kokoro-FastAPI, magi) |
+| Agent / chat / vision LLM | Nemotron nano text + VLM\* | One multimodal Qwen3.6-35B-A3B NVFP4 + MTP, vLLM (shodan) |
+| Intent router | `phi-3-mini`\* | Same Qwen engine on shodan (prefix-cached router prompt) plus deterministic pre-routes |
+| Wikipedia tool | wikipedia.org (live web) | Offline txtai semantic index (~9GB, shodan) |
+| Web search tool | — | Self-hosted SearXNG metasearch (magi), optional + panel-toggleable |
 | Web UI | Daily WebRTC playground | Robot-native audio + local control panel (live camera, transcript, controls) |
 
+\* ran on hosted cloud endpoints upstream (NVIDIA NIM API, ElevenLabs).
+VAD, turn-taking (Silero + smart-turn, on-device ONNX) and robot motion
+were already local upstream and carry over unchanged.
+
 The agent routes each turn between chat, vision and a tool-using ReAct agent
-(movement, offline Wikipedia, speaker naming). The robot tells speakers apart
-and learns their names.
+(movement, offline Wikipedia, live web search with spoken "let me look that
+up" narration, speaker naming). The robot tells speakers apart and learns
+their names, plays from a library of **117 expressive animations** (randomly
+mirrored for variety), keeps gesturing through long replies, and stirs
+gently when idle — all switchable from the control panel.
 
 ## Architecture
 
@@ -77,7 +85,8 @@ and bot exactly as `app/launcher.py` does.
    chit-chat → chat LLM · visual queries → vision LLM · actions/knowledge → ReAct agent
    (with the offline Wikipedia tool)
 3. **Robot Actions**: responses are spoken through Kokoro TTS while the robot wobbles,
-   breathes, and plays expressive animations
+   breathes, and plays expressive animations — the agent can also be asked to
+   search the web (announced aloud), dance, or play any of the 117 clips
 
 ## Project Structure
 
@@ -89,7 +98,9 @@ and bot exactly as `app/launcher.py` does.
 ├── nat/                    # NeMo Agent Toolkit workflow
 │   └── src/ces_tutorial/
 │       ├── config.yml      # router/agent config; all LLM endpoints env-driven
-│       └── functions/      # router, router_agent, offline wiki tool
+│       └── functions/      # router, router_agent, wiki + web search tools
+├── bot/animations/         # 117 clips (photo-booth + converted Pollen libraries)
+├── scripts/                # bench.py, import_pollen_moves.py (animation importer)
 ├── deploy/                 # two-Spark inference stack (compose + host envs)
 └── .env.template           # all endpoints/settings (no API keys)
 ```

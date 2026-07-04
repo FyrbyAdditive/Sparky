@@ -563,7 +563,9 @@ def _build_app() -> FastAPI:
 
     @app.get("/robot/animations")
     def animations():
-        return {"animations": service.list_animations()}
+        # flat names kept for the NAT tool; catalog powers the panel browser
+        return {"animations": service.list_animations(),
+                "catalog": service.animations.catalog()}
 
     @app.post("/robot/play_animation")
     def play_animation(req: PlayAnimationRequest):

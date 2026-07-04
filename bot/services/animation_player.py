@@ -41,15 +41,35 @@ BLEND_IN_SECS = 0.25
 # auto-mirrored (names containing left/right are excluded automatically).
 MIRROR_EXCLUDE: set[str] = set()
 
+# The dance-library imports (plus the emotions-library's dance1-3) — used
+# to categorize the panel's animation browser. Everything else with a
+# description came from the Pollen emotions library; the remainder are the
+# original photo-booth gesture/state clips.
+DANCE_NAMES = {
+    "dance1", "dance2", "dance3",
+    "chicken_peck", "chin_lead", "dizzy_spin", "grid_snap",
+    "groovy_sway_and_roll", "head_tilt_roll", "interwoven_spirals",
+    "jackson_square", "neck_recoil", "pendulum_swing", "polyrhythm_combo",
+    "sharp_side_tilt", "side_glance_flick", "side_peekaboo",
+    "side_to_side_sway", "simple_nod", "stumble_and_recover",
+    "uh_huh_tilt", "yeah_nod",
+}
+
 DEFAULT_ANIMATIONS_DIR = Path(__file__).resolve().parent.parent / "animations"
 
 
 class AnimationClip:
     """A parsed animation clip with per-frame channel access."""
 
-    def __init__(self, name: str, frame_rate: float, data: dict):
+    def __init__(self, name: str, frame_rate: float, data: dict,
+                 description: str = ""):
         self.name = name
         self.frame_rate = float(frame_rate)
+        self.description = description
+        # panel browser grouping: dances / emotions (Pollen, carry a
+        # description) / classics (the original photo-booth set)
+        self.category = ("dances" if name in DANCE_NAMES
+                         else "emotions" if description else "classics")
 
         def scalar_channel(key) -> np.ndarray | None:
             entry = data.get(key)
@@ -116,6 +136,8 @@ class AnimationClip:
         m.name = self.name
         m.frame_rate = self.frame_rate
         m.num_frames = self.num_frames
+        m.description = self.description
+        m.category = self.category
         if self.head_rotation is not None:
             m.head_rotation = self.head_rotation * np.array([-1.0, 1.0, -1.0])
         else:
@@ -214,7 +236,8 @@ class AnimationLibrary:
             try:
                 with open(json_path) as f:
                     raw = json.load(f)
-                clip = AnimationClip(clip_dir.name, raw.get("frame_rate", 24), raw.get("data", {}))
+                clip = AnimationClip(clip_dir.name, raw.get("frame_rate", 24), raw.get("data", {}),
+                                     description=str(raw.get("description", "")))
                 self._clips[clip.name] = clip
             except Exception as e:
                 logger.error(f"Failed to load animation '{clip_dir.name}': {e}")
@@ -222,6 +245,13 @@ class AnimationLibrary:
 
     def names(self) -> list[str]:
         return sorted(self._clips)
+
+    def catalog(self) -> list[dict]:
+        """Panel browser metadata: name, category, description, duration."""
+        return [{"name": c.name, "category": c.category,
+                 "description": c.description,
+                 "duration": round(c.duration, 1)}
+                for _, c in sorted(self._clips.items())]
 
     def get(self, name: str) -> AnimationClip | None:
         return self._clips.get(name)

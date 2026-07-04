@@ -155,11 +155,22 @@
   }
   select:focus { outline: none; border-color: var(--accent); }
 
-  #anims { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+  /* 117 clips: filter box + per-category groups, each scroll-capped so
+     the right column stays usable */
+  #animFilter { width: 100%; margin-bottom: 8px; background: var(--bg-soft);
+                border: 1px solid var(--line); color: var(--text);
+                border-radius: var(--radius-sm); padding: 7px 11px;
+                font-size: 13.5px; font-family: inherit; }
+  #animFilter:focus { outline: none; border-color: var(--accent); }
+  .animGroup { margin-bottom: 10px; }
+  .animGroup h4 { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                  letter-spacing: .08em; color: var(--dim); margin: 0 0 6px 1px; }
+  .animGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+              gap: 6px; max-height: 240px; overflow-y: auto; }
   /* min-width:0 + wrapping: Firefox won't shrink grid items below their
      content, so long names overflowed the clipped card */
-  #anims button { font-size: 12.5px; padding: 7px 4px; background: var(--bg-soft);
-                  min-width: 0; white-space: normal; word-break: break-word; }
+  .animGrid button { font-size: 12.5px; padding: 7px 4px; background: var(--bg-soft);
+                     min-width: 0; white-space: normal; word-break: break-word; }
   .secBody { min-width: 0; }
   #dpad { display: grid; grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 42px); gap: 6px; justify-content: center; }
   #dpad button { padding: 0; background: var(--bg-soft); font-size: 15px; }
@@ -239,7 +250,10 @@
     </details>
     <details class="sec" id="sec-anims">
       <summary>Animations</summary>
-      <div class="secBody"><div id="anims"></div></div>
+      <div class="secBody">
+        <input id="animFilter" type="text" placeholder="Filter 117 animations…">
+        <div id="anims"></div>
+      </div>
     </details>
     <details class="sec" id="sec-speakers">
       <summary>Speakers</summary>
@@ -504,17 +518,55 @@ function syncTools(tools) {
   });
 }
 
-/* ---------- animations ---------- */
+/* ---------- animations (grouped browser with filter) ---------- */
+let animCatalog = [];
+const ANIM_GROUPS = [
+  ['classics', 'Gestures & states'],
+  ['emotions', 'Emotions'],
+  ['dances', 'Dances'],
+];
+function renderAnimations() {
+  const q = $('animFilter').value.trim().toLowerCase();
+  const root = $('anims');
+  root.innerHTML = '';
+  ANIM_GROUPS.forEach(([cat, label]) => {
+    const items = animCatalog.filter(a => a.category === cat &&
+      (!q || a.name.toLowerCase().includes(q) ||
+       (a.description || '').toLowerCase().includes(q)));
+    if (!items.length) return;
+    const group = document.createElement('div');
+    group.className = 'animGroup';
+    const h = document.createElement('h4');
+    h.textContent = `${label} (${items.length})`;
+    const grid = document.createElement('div');
+    grid.className = 'animGrid';
+    items.forEach(a => {
+      const b = document.createElement('button');
+      b.textContent = a.name;
+      b.title = (a.description ? a.description + ' — ' : '') + a.duration + 's';
+      b.onclick = () => play(a.name);
+      grid.appendChild(b);
+    });
+    group.appendChild(h);
+    group.appendChild(grid);
+    root.appendChild(group);
+  });
+  if (!root.children.length) {
+    const d = document.createElement('div');
+    d.className = 'spkEmpty';
+    d.textContent = 'No animations match the filter.';
+    root.appendChild(d);
+  }
+}
 async function loadAnimations() {
   const r = await fetch('robot/animations').then(r => r.json());
-  $('anims').innerHTML = '';
-  (r.animations || []).forEach(name => {
-    const b = document.createElement('button');
-    b.textContent = name;
-    b.onclick = () => play(name);
-    $('anims').appendChild(b);
-  });
+  animCatalog = r.catalog ||
+    (r.animations || []).map(n => ({name: n, category: 'classics',
+                                    description: '', duration: 0}));
+  $('animFilter').placeholder = `Filter ${animCatalog.length} animations…`;
+  renderAnimations();
 }
+$('animFilter').addEventListener('input', renderAnimations);
 
 /* ---------- status ---------- */
 async function refreshStatus() {

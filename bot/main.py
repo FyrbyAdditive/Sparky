@@ -374,6 +374,7 @@ async def run_bot():
         task=task,
         messages=messages,
         mic_gate=mic_gate,
+        tts=tts,
     )
 
     # Warm shodan's prefix cache before the first real turn: one throwaway

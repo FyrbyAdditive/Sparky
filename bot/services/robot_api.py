@@ -31,7 +31,8 @@ _started = False
 _lock = threading.Lock()
 
 # Set by attach_session() once the pipeline exists
-_session = {"loop": None, "task": None, "messages": None, "mic_gate": None}
+_session = {"loop": None, "task": None, "messages": None, "mic_gate": None,
+            "tts": None}
 
 # Transcript fan-out (owned by the API server's event loop)
 _api_loop: asyncio.AbstractEventLoop | None = None
@@ -245,9 +246,10 @@ def _animation_audio_frames(name: str) -> list:
     return frames
 
 
-def attach_session(loop, task, messages, mic_gate):
+def attach_session(loop, task, messages, mic_gate, tts=None):
     """Called from the bot once the pipeline is built."""
-    _session.update(loop=loop, task=task, messages=messages, mic_gate=mic_gate)
+    _session.update(loop=loop, task=task, messages=messages, mic_gate=mic_gate,
+                    tts=tts)
     logger.info("Control panel: session attached")
 
 
@@ -362,6 +364,15 @@ def _build_app() -> FastAPI:
         text = req.text.strip()
         if not text:
             return {"ok": False, "error": "empty"}
+        # Inject directly at the TTS stage: frames queued at the pipeline
+        # source stall behind the LLM stage for the whole agent turn, so
+        # search announcements spoke AFTER the answer. Direct injection
+        # synthesizes immediately even mid-turn.
+        tts, loop = _session["tts"], _session["loop"]
+        if tts is not None and loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                tts.queue_frame(TTSSpeakFrame(text)), loop)
+            return {"ok": True}
         ok = _queue_frames([TTSSpeakFrame(text)])
         return {"ok": ok}
 

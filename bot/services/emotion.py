@@ -12,6 +12,7 @@ Model files download once into the Hugging Face cache; offline afterwards.
 
 import asyncio
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -43,15 +44,19 @@ class Emotion(Enum):
     NEUTRAL = "neutral"
 
 
-# Emotion -> animation clip from bot/animations (see animation_player.py)
+# Emotion -> candidate animation clips from bot/animations; one is chosen
+# at random per reaction so repeated emotions don't replay one gesture.
+# Names that aren't in the loaded library are dropped at reactor startup
+# (the Pollen imports are optional), falling back to the always-present
+# photo-booth clips listed last.
 EMOTION_ANIMATIONS = {
-    Emotion.HAPPY: "antennaSmallWiggle",
-    Emotion.EXCITED: "antennaLargeWiggle",
-    Emotion.SAD: "attentive",           # sympathetic lean-in
-    Emotion.CURIOUS: "intrigued5",
-    Emotion.GREETING: "antennaLargeWiggle",
-    Emotion.FAREWELL: "nod",
-    Emotion.GRATEFUL: "nod",
+    Emotion.HAPPY: ["cheerful1", "laughing1", "success1", "antennaSmallWiggle"],
+    Emotion.EXCITED: ["enthusiastic1", "enthusiastic2", "amazed1", "antennaLargeWiggle"],
+    Emotion.SAD: ["sad1", "sad2", "attentive"],  # attentive = sympathetic lean-in
+    Emotion.CURIOUS: ["curious1", "inquiring1", "inquiring2", "intrigued5"],
+    Emotion.GREETING: ["welcoming1", "welcoming2", "antennaLargeWiggle"],
+    Emotion.FAREWELL: ["nod", "yes1"],
+    Emotion.GRATEFUL: ["grateful1", "proud1", "nod"],
     # NEUTRAL: no reaction
 }
 
@@ -178,6 +183,23 @@ class EmotionReactor:
         self.service = service or ReachyService.get_instance()
         self.detector = EmotionDetector()
         self._last_reaction: dict[Emotion, float] = {}
+        self._clips_cache: dict[Emotion, list[str]] = {}
+
+    def _available_clips(self, emotion: Emotion) -> list[str]:
+        """Candidates that actually exist in the loaded library (cached).
+        Keeps the map forward-compatible: unimported Pollen names drop out
+        with a log line instead of failing at play time."""
+        cached = self._clips_cache.get(emotion)
+        if cached is not None:
+            return cached
+        candidates = EMOTION_ANIMATIONS.get(emotion, [])
+        available = [c for c in candidates if self.service.animations.get(c)]
+        missing = sorted(set(candidates) - set(available))
+        if missing:
+            logger.info(f"Emotion {emotion.value}: clips not in library, "
+                        f"skipping: {', '.join(missing)}")
+        self._clips_cache[emotion] = available
+        return available
 
     def load(self) -> bool:
         return self.detector.load()
@@ -188,9 +210,10 @@ class EmotionReactor:
         if result.emotion is Emotion.NEUTRAL or result.confidence < MIN_CONFIDENCE:
             return
 
-        clip = EMOTION_ANIMATIONS.get(result.emotion)
-        if not clip:
+        clips = self._available_clips(result.emotion)
+        if not clips:
             return
+        clip = random.choice(clips)
 
         now = time.monotonic()
         if now - self._last_reaction.get(result.emotion, 0.0) < COOLDOWN_SECS:

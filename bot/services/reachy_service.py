@@ -1,4 +1,5 @@
 import os
+import random
 import threading
 import time
 import logging
@@ -54,6 +55,8 @@ class ReachyService:
         self.wobbler = None
         self.connected = False
         self.animations = AnimationLibrary()
+        # random horizontal mirroring of non-directional clips (variety)
+        self.mirror_enabled = os.getenv("ANIMATION_MIRROR", "1").strip() != "0"
 
         # All connection behavior is env-driven so the same code runs against
         # the MuJoCo sim (default), a USB-attached robot, or a daemon reachable
@@ -211,9 +214,12 @@ class ReachyService:
         """Names of the available expressive animation clips."""
         return self.animations.names()
 
-    def play_animation(self, name: str) -> bool:
+    def play_animation(self, name: str, mirror: bool | None = None) -> bool:
         """Queue an expressive animation clip (e.g. nod, attentive, intrigued5).
 
+        mirror=None picks randomly for mirrorable clips (halves the
+        repetitiveness of the library for free); True/False forces it,
+        used by the panel/tests. Directional clips never mirror.
         Returns True if the clip was queued.
         """
         clip = self.animations.get(name)
@@ -225,6 +231,12 @@ class ReachyService:
             logger.debug(f"Reachy not connected - ignoring play_animation({name})")
             return False
 
+        mirrored = False
+        if self.mirror_enabled and clip.mirrorable:
+            mirrored = random.random() < 0.5 if mirror is None else bool(mirror)
+        if mirrored:
+            clip = clip.mirrored()
+
         try:
             current_head_pose = self.robot.get_current_head_pose()
             _, current_antennas = self.robot.get_current_joint_positions()
@@ -235,7 +247,8 @@ class ReachyService:
             )
             self.motion_manager.queue_move(move)
             self.motion_manager.set_moving_state(1.0)
-            logger.info(f"Reachy playing animation '{name}' ({clip.duration:.1f}s)")
+            logger.info(f"Reachy playing animation '{name}'"
+                        f"{' (mirrored)' if mirrored else ''} ({clip.duration:.1f}s)")
             return True
         except Exception as e:
             logger.error(f"play_animation('{name}') failed: {e}")

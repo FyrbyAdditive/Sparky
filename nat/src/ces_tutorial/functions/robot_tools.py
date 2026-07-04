@@ -57,12 +57,18 @@ async def robot_play_animation_fn(config: PlayAnimationConfig, builder: Builder)
             _play,
             description=(
                 "Play an expressive animation on the robot body. Input is one animation "
-                "name from: nod, attentive, intrigued5, antennaSmallWiggle, "
-                "antennaLargeWiggle, lookAroundShort, scan, listen1, talking, "
-                "talkingLeftShoulder, talkingRightShoulder, wakeUp1, sleep3, focus, "
-                "idle3old, takePicture, picturePreparation. Use when the user asks the "
-                "robot to move, dance, nod, wiggle its antennas, look around, wake up, "
-                "or go to sleep, or to add physical expression to a response."
+                "name. The library has ~117 clips across categories: gestures (nod, "
+                "yes1, no1, attentive, intrigued5, antennaSmallWiggle, antennaLargeWiggle, "
+                "lookAroundShort, scan), emotions (cheerful1, laughing1, amazed1, "
+                "surprised1, proud1, sad1, scared1, shy1, loving1, grateful1, curious1, "
+                "welcoming1, thoughtful1), dances (dance1, dance2, dance3, "
+                "side_to_side_sway, groovy_sway_and_roll, jackson_square, dizzy_spin, "
+                "yeah_nod), and states (wakeUp1, sleep3, focus, listen1, takePicture). "
+                "Many emotions have numbered variants (e.g. proud2, proud3). If a name "
+                "is unknown the tool replies with the full available list — pick from "
+                "it and retry. Use when the user asks the robot to move, dance, nod, "
+                "wiggle its antennas, look around, wake up, or go to sleep, or to add "
+                "physical expression to a response."
             ),
         )
     finally:

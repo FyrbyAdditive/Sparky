@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 # file-units -> mm, matching photo-booth's remap_head_translation scale=(10,10,10)
 POSITION_SCALE_MM = 10.0
 BLEND_IN_SECS = 0.25
+
+# Clips whose direction is semantically meaningful and must never be
+# auto-mirrored (names containing left/right are excluded automatically).
+MIRROR_EXCLUDE: set[str] = set()
 
 DEFAULT_ANIMATIONS_DIR = Path(__file__).resolve().parent.parent / "animations"
 
@@ -87,6 +92,44 @@ class AnimationClip:
     @property
     def duration(self) -> float:
         return self.num_frames / self.frame_rate
+
+    @property
+    def mirrorable(self) -> bool:
+        """Safe to horizontally mirror: direction isn't part of the clip's
+        meaning (talkingLeftShoulder/talkingRightShoulder are the named
+        exceptions; MIRROR_EXCLUDE catches future semantic cases)."""
+        return (re.search(r"left|right", self.name, re.I) is None
+                and self.name not in MIRROR_EXCLUDE)
+
+    def mirrored(self) -> "AnimationClip":
+        """Horizontally mirrored view of this clip (cached).
+
+        Mirror across the sagittal plane: negate neck_roll, neck_yaw,
+        lateral head_y and body_angle; swap the antenna tracks (the sides
+        use opposite sign conventions — nod holds r=-20/l=+20 — so a plain
+        swap is the correct mirror); neck_pitch, head_x, head_z unchanged.
+        """
+        cached = getattr(self, "_mirrored", None)
+        if cached is not None:
+            return cached
+        m = object.__new__(AnimationClip)
+        m.name = self.name
+        m.frame_rate = self.frame_rate
+        m.num_frames = self.num_frames
+        if self.head_rotation is not None:
+            m.head_rotation = self.head_rotation * np.array([-1.0, 1.0, -1.0])
+        else:
+            m.head_rotation = None
+        if self.head_position is not None:
+            m.head_position = self.head_position * np.array([1.0, -1.0, 1.0])
+        else:
+            m.head_position = None
+        m.r_antenna = None if self.l_antenna is None else self.l_antenna.copy()
+        m.l_antenna = None if self.r_antenna is None else self.r_antenna.copy()
+        m.body_angle = None if self.body_angle is None else -self.body_angle
+        m._mirrored = self  # mirroring twice returns the original
+        self._mirrored = m
+        return m
 
     def _sample(self, channel: np.ndarray | None, frame_t: float, default):
         if channel is None:

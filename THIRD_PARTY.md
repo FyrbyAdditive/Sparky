@@ -30,3 +30,11 @@ https://github.com/NVIDIA-AI-IOT/reachy-mini-jetson-assistant (Apache-2.0)
 | Nemotron ASR streaming NIM (incl. sortformer diarizer) | `nvcr.io/nim/nvidia/nemotron-asr-streaming` | NVIDIA AI Product License |
 | Kokoro-82M (Kokoro-FastAPI) | `ghcr.io/remsky/kokoro-fastapi-gpu` | Apache-2.0 |
 | txtai-wikipedia index | Hugging Face `NeuML/txtai-wikipedia` | CC-BY-SA (Wikipedia content) |
+
+## Animation clips
+
+| Source | License | Destination |
+|---|---|---|
+| NVIDIA spark-reachy-photo-booth animLibrary (17 clips + sfx) | Apache-2.0 | `bot/animations/` |
+| Pollen Robotics reachy-mini-emotions-library (81 clips + audio, converted 50Hz→24fps) | Apache-2.0 | `bot/animations/` (see POLLEN_ATTRIBUTION.md) |
+| Pollen Robotics reachy-mini-dances-library (19 clips, converted) | Apache-2.0 | `bot/animations/` (see POLLEN_ATTRIBUTION.md) |

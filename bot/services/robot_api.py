@@ -256,6 +256,8 @@ class MuteRequest(BaseModel):
 
 class PlayAnimationRequest(BaseModel):
     name: str
+    # None = random for mirrorable clips; True/False forces (testing)
+    mirror: bool | None = None
 
 
 class SpeakerNameRequest(BaseModel):
@@ -569,7 +571,7 @@ def _build_app() -> FastAPI:
             return {"ok": False, "error": "unknown_animation", "animations": service.list_animations()}
         if not service.connected:
             return {"ok": False, "error": "robot_not_connected"}
-        ok = service.play_animation(req.name)
+        ok = service.play_animation(req.name, mirror=req.mirror)
         if ok:
             audio_frames = _animation_audio_frames(req.name)
             if audio_frames:

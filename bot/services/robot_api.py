@@ -719,18 +719,80 @@ def _build_app() -> FastAPI:
         logger.info(f"Camera capture resolution set to {value}")
         return {"ok": True, "resolution": value}
 
+    def _draw_tracking_overlay(frame):
+        """Draw the face tracker's latest detections onto a BGR stream frame.
+
+        Detections live in the tracker's 320-wide detect frame; the stream
+        frame is at the panel resolution, so coordinates scale by width
+        ratio (both resizes preserve aspect). Snapshot may be one tracker
+        cycle (~125ms) older than the frame — fine for an admin view.
+        """
+        import time as _t
+
+        import cv2
+
+        tracker = service.face_tracker
+        snap = tracker.detections() if tracker else None
+        h, w = frame.shape[:2]
+        if snap is None or _t.monotonic() - snap["ts"] > 1.0:
+            cv2.putText(frame, "tracking: no data", (8, h - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
+            return frame
+
+        s = w / snap["frame_w"] if snap["frame_w"] else 0.0
+        for face in snap["faces"] if s else []:
+            x, y, fw, fh = (int(v * s) for v in face["box"])
+            if face["is_target"]:
+                color, thick = (80, 220, 80), 2
+            else:
+                color, thick = (170, 170, 170), 1
+            cv2.rectangle(frame, (x, y), (x + fw, y + fh), color, thick)
+            cv2.putText(frame, f"#{face['track_id']}", (x, max(12, y - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+            if face["mouth"] is not None:
+                for mx, my in face["mouth"]:
+                    cv2.circle(frame, (int(mx * s), int(my * s)), 2, color, -1)
+            # mouth-activity bar under the box (talking indicator)
+            level = min(1.0, face["mouth_ema"] / 12.0)
+            if level > 0.05:
+                cv2.rectangle(frame, (x, y + fh + 3),
+                              (x + int(fw * level), y + fh + 6), (60, 160, 255), -1)
+
+        doa = snap["doa"]
+        if doa is not None:
+            # head-relative azimuth, left positive: tick along the top edge
+            tick_x = int(w / 2 - (doa["az_deg"] / 45.0) * (w / 2))
+            tick_x = max(6, min(w - 6, tick_x))
+            cv2.line(frame, (tick_x, 0), (tick_x, 14), (60, 160, 255), 2)
+            # cv2 Hershey fonts are ASCII-only — no degree sign or middots
+            cv2.putText(frame, f"voice {doa['az_deg']:+.0f}deg",
+                        (max(4, tick_x - 34), 26),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (60, 160, 255), 1)
+
+        label = f"{snap['detector']} | {len(snap['faces'])} face(s)"
+        if snap["suppressed"]:
+            label += f" | paused: {snap['suppressed']}"
+        cv2.putText(frame, label, (8, h - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+        return frame
+
     @app.get("/camera/stream")
-    async def camera_stream():
+    async def camera_stream(overlay: int = 0):
         """Live MJPEG feed for the panel (~8fps). The generator dies with the
-        client connection, so an unwatched stream costs nothing."""
+        client connection, so an unwatched stream costs nothing. overlay=1
+        draws the face tracker's detections onto each frame (per-viewer —
+        it's a query param, so other open panels are unaffected)."""
         from fastapi.responses import StreamingResponse
 
         from . import camera_service
 
+        annotate = _draw_tracking_overlay if overlay else None
+
         async def frames():
             loop = asyncio.get_running_loop()
             while True:
-                jpeg = await loop.run_in_executor(None, camera_service.grab_jpeg)
+                jpeg = await loop.run_in_executor(
+                    None, lambda: camera_service.grab_jpeg(annotate=annotate))
                 if jpeg is None:
                     await asyncio.sleep(1.0)  # camera unavailable; keep trying
                     continue

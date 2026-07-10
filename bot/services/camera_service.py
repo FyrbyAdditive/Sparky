@@ -117,9 +117,13 @@ def grab_rgb():
     return frame_rgb.tobytes(), (w, h)
 
 
-def grab_jpeg(quality: int = 70):
+def grab_jpeg(quality: int = 70, annotate=None):
     """One JPEG frame for the MJPEG stream, or None. Encodes straight from
-    BGR (no RGB round-trip); JPEG encode runs outside the capture lock."""
+    BGR (no RGB round-trip); JPEG encode runs outside the capture lock.
+
+    annotate: optional callable(frame_bgr) -> frame_bgr applied after the
+    downscale, outside the lock — the overlay drawing hook. Annotation
+    failures degrade to the clean frame, never to a dead stream."""
     import cv2
 
     with _lock:
@@ -127,5 +131,10 @@ def grab_jpeg(quality: int = 70):
     if frame_bgr is None:
         return None
     frame_bgr = _downscale(frame_bgr)
+    if annotate is not None:
+        try:
+            frame_bgr = annotate(frame_bgr)
+        except Exception as e:
+            logger.warning(f"camera_service: overlay draw failed: {e}")
     ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     return buf.tobytes() if ok else None

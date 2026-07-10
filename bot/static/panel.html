@@ -257,6 +257,10 @@
       <summary>Camera</summary>
       <div class="secBody">
         <img id="camFeed" alt="camera feed">
+        <label class="spkRow" style="cursor:pointer" title="Draw face-tracking boxes, the current target and voice direction on the feed (this browser only)">
+          <span>Show tracking</span>
+          <input type="checkbox" id="camOverlay" onchange="setCamOverlay(this.checked)">
+        </label>
         <select id="camRes"></select>
         <button id="photoBtn" style="width:100%;margin-top:8px"
                 title="Play the photo animation and save a picture to ~/.sparky/photos"
@@ -434,12 +438,25 @@ function initSections() {
 }
 
 /* ---------- camera: live feed + resolution ---------- */
+// overlay is a per-viewer preference (query param on the stream URL),
+// persisted like the section-open prefs
+function camOverlayOn() { return localStorage.getItem('camOverlay') === '1'; }
+
+function setCamOverlay(on) {
+  localStorage.setItem('camOverlay', on ? '1' : '0');
+  const img = $('camFeed');
+  if (img.getAttribute('src')) img.removeAttribute('src'); // force reconnect
+  syncCameraStream();
+}
+
 function syncCameraStream() {
   const img = $('camFeed');
   const want = $('sec-camera').open && !document.hidden;
   const streaming = !!img.getAttribute('src');
-  if (want && !streaming) img.src = 'camera/stream?t=' + Date.now();
+  if (want && !streaming)
+    img.src = 'camera/stream?t=' + Date.now() + (camOverlayOn() ? '&overlay=1' : '');
   else if (!want && streaming) img.removeAttribute('src');
+  $('camOverlay').checked = camOverlayOn();
 }
 
 let camResLoaded = false;

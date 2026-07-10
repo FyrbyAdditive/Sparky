@@ -23,10 +23,23 @@ were already local upstream and carry over unchanged.
 
 The agent routes each turn between chat, vision and a tool-using ReAct agent
 (movement, offline Wikipedia, live web search with spoken "let me look that
-up" narration, speaker naming). The robot tells speakers apart and learns
-their names, plays from a library of **117 expressive animations** (randomly
-mirrored for variety), keeps gesturing through long replies, and stirs
-gently when idle — all switchable from the control panel.
+up" narration, speaker naming, reminders, weather, photos, clock, settings
+by voice). The robot tells speakers apart and learns their names, and plays
+from a library of **117 expressive animations** (randomly mirrored for
+variety) — all switchable from the control panel.
+
+It also perceives and moves continuously: **face tracking** follows people
+with the head (YuNet on the camera at ~8fps) and locks onto whoever is
+speaking by fusing mouth movement with the head's ReSpeaker XVF3800 mic
+array, whose on-chip 4-mic direction-of-arrival is read over USB — the
+robot turns toward a voice even before it sees a face. A **procedural
+motion texture** (state-driven Ornstein-Uhlenbeck noise) keeps the robot
+alive with motion that never repeats: idle wander with micro-saccades,
+attentive stillness with a head-tilt while you talk, and energy-matched
+sway through long replies. Both layers yield to deliberate animations and
+the e-stop, are hard-clamped inside the robot's safe envelope, and can be
+watched live — the panel's camera view has a "Show tracking" overlay
+drawing detection boxes, the current target and the voice direction.
 
 ## Architecture
 
@@ -85,8 +98,9 @@ and bot exactly as `app/launcher.py` does.
    chit-chat → chat LLM · visual queries → vision LLM · actions/knowledge → ReAct agent
    (with the offline Wikipedia tool)
 3. **Robot Actions**: responses are spoken through Kokoro TTS while the robot wobbles,
-   breathes, and plays expressive animations — the agent can also be asked to
-   search the web (announced aloud), dance, or play any of the 117 clips
+   breathes, tracks faces and voices, and layers procedural ambient motion —
+   the agent can also be asked to search the web (announced aloud), dance,
+   set reminders, take photos, or play any of the 117 clips
 
 ## Project Structure
 
@@ -94,7 +108,7 @@ and bot exactly as `app/launcher.py` does.
 ├── bot/                    # pipecat bot: WebRTC, speech, robot control
 │   ├── main.py             # pipeline wiring (STT → LLM → TTS → robot)
 │   ├── nat_vision_llm.py   # vision-aware LLM client for the NAT router
-│   └── services/           # robot motion, wobble, animations, daemon handling
+│   └── services/           # robot motion, face tracking, motion texture, animations
 ├── nat/                    # NeMo Agent Toolkit workflow
 │   └── src/ces_tutorial/
 │       ├── config.yml      # router/agent config; all LLM endpoints env-driven

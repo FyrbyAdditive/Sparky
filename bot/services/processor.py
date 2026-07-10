@@ -1,11 +1,15 @@
+import time
+
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.frames.frames import (
     AudioRawFrame,
     Frame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
-    UserStartedSpeakingFrame
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
+from .local_audio import GATE
 from .reachy_service import ReachyService
 
 class ReachyWobblerProcessor(FrameProcessor):
@@ -25,6 +29,11 @@ class ReachyWobblerProcessor(FrameProcessor):
         # Track bot speaking state
         if isinstance(frame, BotStartedSpeakingFrame):
             self.bot_is_speaking = True
+            # the mic is gated while the bot talks, so a missed
+            # UserStoppedSpeaking can't clear the flag later — clear it here
+            if GATE["user_speaking"]:
+                GATE["user_speaking"] = False
+                GATE["user_stopped_ts"] = time.monotonic()
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self.bot_is_speaking = False
@@ -32,7 +41,12 @@ class ReachyWobblerProcessor(FrameProcessor):
 
         elif isinstance(frame, UserStartedSpeakingFrame):
             self.bot_is_speaking = False
+            GATE["user_speaking"] = True
             self.service.set_listening_pose()
+
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            GATE["user_speaking"] = False
+            GATE["user_stopped_ts"] = time.monotonic()
 
         # Only feed audio if bot is actively speaking. (This used to md5 every
         # PCM chunk to dedup frames — pipecat does not duplicate frames on

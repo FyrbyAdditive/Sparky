@@ -3,8 +3,8 @@
 Design overview
 - Primary moves (emotions, dances, goto, breathing) are mutually exclusive and run
   sequentially.
-- Secondary moves (speech sway, face tracking) are additive offsets applied on top
-  of the current primary pose.
+- Secondary moves (speech sway, face tracking, motion texture) are additive
+  offsets applied on top of the current primary pose, clamped as a sum.
 - There is a single control point to the robot: `ReachyMini.set_target`.
 - The control loop runs near 100 Hz and is phase-aligned via a monotonic clock.
 - Idle behaviour starts an infinite `BreathingMove` after a short inactivity delay
@@ -56,6 +56,18 @@ logger = logging.getLogger(__name__)
 
 # Configuration constants
 CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
+
+# Hard bounds on the SUMMED secondary offsets (speech + face + texture),
+# applied in _get_secondary_pose. The daemon does not clamp: an
+# unreachable composed pose raises in IK and the robot silently holds
+# its last pose, so saturating here converts "offsets too big" from a
+# motion stall into graceful clipping. Bounds sit inside the daemon's
+# reachable envelope with the primary pose near neutral (look_at uses
+# ±40° yaw / ±30° pitch as full deliberate turns).
+SECONDARY_MAX_XYZ_M = 0.03          # per-axis translation
+SECONDARY_MAX_ROLL_RAD = 0.20       # ~11°
+SECONDARY_MAX_PITCH_RAD = 0.35      # ~20°
+SECONDARY_MAX_YAW_RAD = 0.50        # ~29°
 
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
@@ -191,6 +203,14 @@ class MovementState:
         0.0,
         0.0,
     )
+    texture_offsets: Tuple[float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
 
     # Status flags
     last_primary_pose: FullBodyPose | None = None
@@ -311,6 +331,17 @@ class MovementManager:
         )
         self._face_offsets_dirty = False
 
+        self._texture_offsets_lock = threading.Lock()
+        self._pending_texture_offsets: Tuple[float, float, float, float, float, float] = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        self._texture_offsets_dirty = False
+
         self._shared_state_lock = threading.Lock()
         self._shared_last_activity_time = self.state.last_activity_time
         self._shared_is_listening = self._is_listening
@@ -334,6 +365,32 @@ class MovementManager:
         with self._speech_offsets_lock:
             self._pending_speech_offsets = offsets
             self._speech_offsets_dirty = True
+
+    def get_commanded_head_ypr(self) -> Tuple[float, float, float]:
+        """(roll, pitch, yaw) radians of the last commanded head pose.
+
+        Thread-safe snapshot for the face tracker: sampled at frame-grab
+        time it anchors the visual servo to where the head ACTUALLY
+        pointed when the image was taken, so sway/texture/self-motion
+        between grab and correction doesn't read as face motion.
+        """
+        from scipy.spatial.transform import Rotation
+
+        with self._status_lock:
+            head = self._last_commanded_pose[0]
+        roll, pitch, yaw = Rotation.from_matrix(head[:3, :3]).as_euler("xyz")
+        return (float(roll), float(pitch), float(yaw))
+
+    def set_texture_offsets(self, offsets: Tuple[float, float, float, float, float, float]) -> None:
+        """Update procedural motion-texture offsets (x, y, z, roll, pitch, yaw).
+
+        Same units and frame as speech offsets. Texture is ambient — unlike
+        speech it does NOT count as activity, so idle breathing (the neutral
+        re-centering base) keeps running underneath it.
+        """
+        with self._texture_offsets_lock:
+            self._pending_texture_offsets = offsets
+            self._texture_offsets_dirty = True
 
     def set_moving_state(self, duration: float) -> None:
         """Mark the robot as actively moving for the provided duration.
@@ -399,6 +456,17 @@ class MovementManager:
         if face_offsets is not None:
             self.state.face_tracking_offsets = face_offsets
             self.state.update_activity()
+
+        texture_offsets: Tuple[float, float, float, float, float, float] | None = None
+        with self._texture_offsets_lock:
+            if self._texture_offsets_dirty:
+                texture_offsets = self._pending_texture_offsets
+                self._texture_offsets_dirty = False
+
+        # deliberately no update_activity(): texture layers on top of the
+        # idle breathing base rather than suppressing it
+        if texture_offsets is not None:
+            self.state.texture_offsets = texture_offsets
 
     def _handle_command(self, command: str, payload: Any, current_time: float) -> None:
         """Handle a single cross-thread command."""
@@ -554,25 +622,41 @@ class MovementManager:
         return primary_full_body_pose
 
     def _get_secondary_pose(self) -> FullBodyPose | None:
-        """Get the secondary full body pose from speech and face tracking offsets.
+        """Get the secondary full body pose from speech, face and texture offsets.
 
         Returns None when every offset is exactly zero: composing an identity
         offset is a no-op, and skipping it avoids a scipy Rotation build plus
         an SVD reorthonormalization per tick (100Hz, GIL-holding) — the
         common case whenever the robot isn't speaking or face-tracking.
+
+        The sum is clamped to the SECONDARY_MAX_* envelope: the daemon
+        rejects (not clamps) unreachable poses, so saturation here is what
+        keeps stacked sources from silently stalling all motion.
         """
-        # Combine speech sway offsets + face tracking offsets for secondary pose
+        speech = self.state.speech_offsets
+        face = self.state.face_tracking_offsets
+        texture = self.state.texture_offsets
         secondary_offsets = [
-            self.state.speech_offsets[0] + self.state.face_tracking_offsets[0],
-            self.state.speech_offsets[1] + self.state.face_tracking_offsets[1],
-            self.state.speech_offsets[2] + self.state.face_tracking_offsets[2],
-            self.state.speech_offsets[3] + self.state.face_tracking_offsets[3],
-            self.state.speech_offsets[4] + self.state.face_tracking_offsets[4],
-            self.state.speech_offsets[5] + self.state.face_tracking_offsets[5],
+            speech[0] + face[0] + texture[0],
+            speech[1] + face[1] + texture[1],
+            speech[2] + face[2] + texture[2],
+            speech[3] + face[3] + texture[3],
+            speech[4] + face[4] + texture[4],
+            speech[5] + face[5] + texture[5],
         ]
 
         if not any(secondary_offsets):
             return None
+
+        for i in range(3):
+            secondary_offsets[i] = max(-SECONDARY_MAX_XYZ_M,
+                                       min(SECONDARY_MAX_XYZ_M, secondary_offsets[i]))
+        secondary_offsets[3] = max(-SECONDARY_MAX_ROLL_RAD,
+                                   min(SECONDARY_MAX_ROLL_RAD, secondary_offsets[3]))
+        secondary_offsets[4] = max(-SECONDARY_MAX_PITCH_RAD,
+                                   min(SECONDARY_MAX_PITCH_RAD, secondary_offsets[4]))
+        secondary_offsets[5] = max(-SECONDARY_MAX_YAW_RAD,
+                                   min(SECONDARY_MAX_YAW_RAD, secondary_offsets[5]))
 
         secondary_head_pose = create_head_pose(
             x=secondary_offsets[0],
@@ -602,6 +686,7 @@ class MovementManager:
                 id(self.state.last_primary_pose),
                 self.state.speech_offsets,
                 self.state.face_tracking_offsets,
+                self.state.texture_offsets,
             )
             if self._pose_cache is not None and self._pose_cache_key == key:
                 return self._pose_cache

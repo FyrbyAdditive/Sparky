@@ -221,6 +221,15 @@ class AnimationDirector:
 
     # ------------------------------------------------------------- telemetry
 
+    def is_busy(self) -> bool:
+        """True while a deliberate clip is playing or pending.
+
+        Suppression signal for the ambient layers (face tracking, motion
+        texture): they yield whenever the director owns the stage.
+        """
+        self._prune(time.monotonic())
+        return bool(self._timeline)
+
     def status(self) -> dict:
         now = time.monotonic()
         self._prune(now)

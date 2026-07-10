@@ -366,6 +366,21 @@ class MovementManager:
             self._pending_speech_offsets = offsets
             self._speech_offsets_dirty = True
 
+    def get_commanded_head_ypr(self) -> Tuple[float, float, float]:
+        """(roll, pitch, yaw) radians of the last commanded head pose.
+
+        Thread-safe snapshot for the face tracker: sampled at frame-grab
+        time it anchors the visual servo to where the head ACTUALLY
+        pointed when the image was taken, so sway/texture/self-motion
+        between grab and correction doesn't read as face motion.
+        """
+        from scipy.spatial.transform import Rotation
+
+        with self._status_lock:
+            head = self._last_commanded_pose[0]
+        roll, pitch, yaw = Rotation.from_matrix(head[:3, :3]).as_euler("xyz")
+        return (float(roll), float(pitch), float(yaw))
+
     def set_texture_offsets(self, offsets: Tuple[float, float, float, float, float, float]) -> None:
         """Update procedural motion-texture offsets (x, y, z, roll, pitch, yaw).
 

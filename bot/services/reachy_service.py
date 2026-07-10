@@ -54,6 +54,7 @@ class ReachyService:
         self.motion_manager = None
         self.wobbler = None
         self.face_tracker = None
+        self.motion_texture = None
         self.connected = False
         self.animations = AnimationLibrary()
         # random horizontal mirroring of non-directional clips (variety)
@@ -154,8 +155,13 @@ class ReachyService:
             self.wobbler = HeadWobbler(self.motion_manager.set_speech_offsets)
             self.wobbler.start()
 
+            # 4. Initialize ambient motion (state-driven procedural texture)
+            from .motion_texture import MotionTexture
+            self.motion_texture = MotionTexture(self, self.motion_manager.set_texture_offsets)
+            self.motion_texture.start()
+
             self.connected = True
-            logger.info("Reachy Service Started: Breathing, Sway & Face Tracking active.")
+            logger.info("Reachy Service Started: Breathing, Sway, Face Tracking & Texture active.")
         except Exception as e:
             import traceback
             logger.warning(f"Reachy Mini daemon not available: {e}")
@@ -270,6 +276,8 @@ class ReachyService:
         # Stop background threads
         if self.face_tracker:
             self.face_tracker.stop()
+        if self.motion_texture:
+            self.motion_texture.stop()
         if self.motion_manager:
             self.motion_manager.stop()
         if self.wobbler:
@@ -289,6 +297,7 @@ class ReachyService:
         self.motion_manager = None
         self.wobbler = None
         self.face_tracker = None
+        self.motion_texture = None
         self.connected = False
 
         logger.info("Reachy service disconnected")

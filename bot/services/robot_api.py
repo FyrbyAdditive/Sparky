@@ -71,10 +71,23 @@ OPTIONAL_TOOLS: dict[str, dict] = {
         # default OFF: the bundled sfx grate quickly (Tim's call)
         "enabled": os.getenv("ANIMATION_SOUNDS_ENABLED", "0").strip() == "1",
     },
+    "motion_texture": {
+        "label": "Motion texture (procedural)",
+        "description": "Continuous, unique ambient motion synthesized from state and "
+                       "voice — the base layer of liveliness.",
+        "enabled": os.getenv("MOTION_TEXTURE_ENABLED", "1").strip() != "0",
+        "params": {
+            "intensity": {"label": "Intensity", "unit": "%",
+                          "value": float(os.getenv("MOTION_TEXTURE_INTENSITY", "100")),
+                          "min": 0, "max": 150},
+        },
+    },
     "speaking_animations": {
         "label": "Speaking animations",
         "description": "Keep gently animating while Sparky talks through longer replies.",
-        "enabled": os.getenv("SPEAKING_ANIMATIONS_ENABLED", "1").strip() != "0",
+        # default OFF since the motion texture became the base layer;
+        # re-enable to layer the canned talking clips on top
+        "enabled": os.getenv("SPEAKING_ANIMATIONS_ENABLED", "0").strip() == "1",
     },
     "face_tracking": {
         "label": "Face tracking",
@@ -92,7 +105,8 @@ OPTIONAL_TOOLS: dict[str, dict] = {
     "idle_animations": {
         "label": "Idle animations",
         "description": "Play a gentle animation now and then when Sparky is idle.",
-        "enabled": os.getenv("IDLE_ANIMATIONS_ENABLED", "1").strip() != "0",
+        # default OFF since the motion texture became the base layer
+        "enabled": os.getenv("IDLE_ANIMATIONS_ENABLED", "0").strip() == "1",
         # numeric settings rendered as inputs in the panel; values are
         # clamped to [min, max] on write and persist alongside enabled
         "params": {
@@ -118,9 +132,16 @@ def _load_tool_states():
         import json
 
         saved = json.loads(_TOOLS_FILE.read_text())
+        # one-time migration: a tools.json written before the motion
+        # texture existed carries the OLD defaults (clip loops on). The
+        # texture replaced them as the base layer, so ignore those two
+        # persisted states once; the next save includes motion_texture
+        # and later user choices stick normally.
+        skip = (() if "motion_texture" in saved
+                else ("speaking_animations", "idle_animations"))
         for name, state in saved.items():
             tool = OPTIONAL_TOOLS.get(name)
-            if tool is None:
+            if tool is None or name in skip:
                 continue
             if isinstance(state, bool):
                 tool["enabled"] = state
@@ -196,6 +217,15 @@ def _tracking_status() -> dict:
         from .reachy_service import ReachyService
         tracker = ReachyService.get_instance().face_tracker
         return tracker.status() if tracker else {}
+    except Exception:
+        return {}
+
+
+def _texture_status() -> dict:
+    try:
+        from .reachy_service import ReachyService
+        texture = ReachyService.get_instance().motion_texture
+        return texture.status() if texture else {}
     except Exception:
         return {}
 
@@ -551,6 +581,7 @@ def _build_app() -> FastAPI:
             "camera": _camera_state(),
             "animation": _director_status(),
             "tracking": _tracking_status(),
+            "texture": _texture_status(),
             "voice": {"voice": VOICE["voice"],
                       "options": await _kokoro_voices()},
             "models": {

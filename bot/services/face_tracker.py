@@ -11,11 +11,22 @@ visual servo: each detection nudges the offset by a fraction of the
 remaining angular error rather than commanding an absolute pose.
 
 Speaker association: while the user is speaking (GATE["user_speaking"],
-VAD-driven), faces whose mouth region shows frame-to-frame motion score
-far higher in target selection, so the head locks onto the talker rather
-than the largest face. A sound-direction hook (set_doa) lets the mic
-array bias selection the same way and pull gaze toward an off-camera
-voice.
+VAD-driven, or the mic array's own speech flag), faces whose mouth
+region shows frame-to-frame motion score far higher in target selection,
+so the head locks onto the talker rather than the largest face. The
+head's ReSpeaker XVF3800 also computes 4-mic direction-of-arrival
+on-chip; it is read out-of-band over USB vendor control (the audio
+stream itself is downmixed mono, verified experimentally), and while
+speech is detected it biases selection toward the face nearest that
+bearing — or pulls gaze toward an off-camera voice when no face is
+visible.
+
+The camera and mic array ride in the moving head, so every measurement
+is anchored to its own instant: tracking offsets are snapshotted at
+frame-grab / DOA-read time and targets are formed as increments on that
+snapshot. Head motion between measurement and correction (sway, texture,
+the tracker's own slew) therefore never reads as target motion — the
+sway keeps oscillating, but centered on the face.
 
 Safety/arbitration: offsets ramp to zero (never snap) whenever the
 AnimationDirector owns the stage, the e-stop latch is set, the robot is
@@ -60,8 +71,10 @@ _SCORE_THRESHOLD = 0.6
 # value is fine and env-tunable.
 _H_FOV_DEG = float(os.getenv("FACE_TRACK_HFOV_DEG", "68"))
 
-# Visual-servo tuning
-_GAIN = 0.35            # fraction of remaining angular error applied per detection
+# Visual-servo tuning. The correction is an increment on the offsets
+# snapshotted at frame-grab time, so near-unity gain is stable; the
+# remaining margin damps detection noise.
+_GAIN = 0.8
 _DEADBAND = 0.05        # normalized image error below which we hold still
 _MAX_PITCH_RAD = 0.26   # ~15°; yaw limit is the max_yaw_deg panel param
 _PURSUE_RATE = 0.9      # rad/s slew while following a face
@@ -103,8 +116,13 @@ class FaceTracker:
         self._target_track: int | None = None
         self._last_face_seen = 0.0
 
-        # mic-array direction of arrival: set_doa() from the audio side
+        # mic-array direction of arrival: read from the ReSpeaker over USB
+        # vendor control each cycle (or fed externally via set_doa)
         self._doa = {"az_deg": 0.0, "conf": 0.0, "ts": 0.0}
+        self._respeaker = None
+        self._doa_ok = True
+        self._doa_failures = 0
+        self._chip_speech_ts = 0.0
 
         # telemetry for /status.tracking
         self._telemetry: dict = {"faces": 0, "target": None, "suppressed": "off"}
@@ -154,6 +172,49 @@ class FaceTracker:
         """Mic-array direction of arrival, degrees, head frame (left > 0)."""
         self._doa = {"az_deg": float(az_deg), "conf": float(conf),
                      "ts": time.monotonic()}
+
+    def _init_doa(self) -> None:
+        """Open the ReSpeaker XVF3800 control channel (once, best-effort)."""
+        if self._respeaker is not None or not self._doa_ok:
+            return
+        try:
+            from reachy_mini.media.audio_control_utils import init_respeaker_usb
+
+            self._respeaker = init_respeaker_usb()
+            if self._respeaker is None:
+                raise RuntimeError("device not found")
+            fw = self._respeaker.read("VERSION")
+            logger.info(f"Face tracker: ReSpeaker DOA available (fw {fw})")
+        except Exception as e:
+            self._doa_ok = False
+            logger.info(f"Face tracker: mic-array DOA unavailable ({e}); "
+                        "vision-only speaker association")
+
+    def _read_doa(self, now: float) -> None:
+        """Poll on-chip DOA. SDK convention: 0 rad = left, π/2 = front,
+        π = right — mapped to head-frame azimuth with left positive.
+        Skipped while the robot itself is talking (its speaker sits under
+        the mics; AEC should cancel it, but don't steer on the residue)."""
+        from .local_audio import GATE
+
+        if self._respeaker is None or GATE["bot_speaking"]:
+            return
+        try:
+            result = self._respeaker.read("DOA_VALUE_RADIANS")
+        except Exception:
+            self._doa_failures += 1
+            if self._doa_failures >= 5:
+                logger.warning("Face tracker: DOA reads failing; disabling")
+                self._respeaker = None
+                self._doa_ok = False
+            return
+        self._doa_failures = 0
+        if result is None:
+            return
+        az_deg = 90.0 - math.degrees(float(result[0]))
+        if bool(result[1]):
+            self._chip_speech_ts = now
+            self.set_doa(az_deg, 1.0)
 
     # ------------------------------------------------------------- detector
 
@@ -287,18 +348,22 @@ class FaceTracker:
             if now - tr.get("last_seen", 0.0) > _TRACK_TTL:
                 del self._tracks[tid]
 
-    def _face_azimuth_deg(self, face, img_w: int) -> float:
-        """Face bearing in the head frame (left positive), current offsets in."""
+    @staticmethod
+    def _face_bearing_deg(face, img_w: int) -> float:
+        """Face bearing relative to the camera axis (left positive).
+
+        The mic array and camera share the head, so this compares
+        directly against the DOA azimuth — both are head-relative at
+        (nearly) the same instant; no pose math needed.
+        """
         ex = (face["center"][0] - img_w / 2.0) / (img_w / 2.0)
         # image-right is robot-right, i.e. negative yaw
-        cam_az = -ex * (_H_FOV_DEG / 2.0)
-        return math.degrees(self._current[5]) + cam_az
+        return -ex * (_H_FOV_DEG / 2.0)
 
     def _select_target(self, faces: list[dict], img_w: int, now: float,
                        user_speaking: bool) -> dict | None:
         doa = self._doa
-        doa_live = (user_speaking and doa["conf"] > 0.2
-                    and now - doa["ts"] < _DOA_FRESH_SECS)
+        doa_live = doa["conf"] > 0.2 and now - doa["ts"] < _DOA_FRESH_SECS
         best, best_score = None, -1.0
         for face in faces:
             x, y, w, h = face["box"]
@@ -310,7 +375,7 @@ class FaceTracker:
                 ema = self._tracks[face["track_id"]]["mouth_ema"]
                 score += _W_MOUTH * min(1.0, ema / _MOUTH_NORM)
             if doa_live:
-                err = abs(self._face_azimuth_deg(face, img_w) - doa["az_deg"])
+                err = abs(self._face_bearing_deg(face, img_w) - doa["az_deg"])
                 score += _W_DOA * doa["conf"] * max(0.0, 1.0 - err / 30.0)
             if score > best_score:
                 best, best_score = face, score
@@ -355,6 +420,16 @@ class FaceTracker:
                         break
                     continue
 
+                self._init_doa()
+
+                # Snapshot the tracking offsets NOW: the head keeps moving
+                # (sway, texture, our own slew) between this grab and the
+                # correction below, and the image reflects this instant.
+                # Targets are increments on this snapshot, so self-motion
+                # during detection latency never reads as face motion.
+                yaw_at_grab = self._current[5]
+                pitch_at_grab = self._current[4]
+
                 frame = camera_service.grab_bgr()
                 if frame is None:
                     self._target = ((0.0,) * 6, _RECENTER_RATE)
@@ -374,9 +449,11 @@ class FaceTracker:
                 faces = self._detect(frame)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 now = time.monotonic()
+                self._read_doa(now)
                 self._update_tracks(faces, gray, now)
 
-                user_speaking = bool(GATE["user_speaking"])
+                user_speaking = bool(GATE["user_speaking"]) \
+                    or now - self._chip_speech_ts < 0.5
                 img_w = frame.shape[1]
                 img_h = frame.shape[0]
                 target_face = self._select_target(faces, img_w, now, user_speaking) \
@@ -392,8 +469,8 @@ class FaceTracker:
                     ex = (target_face["center"][0] - img_w / 2.0) / (img_w / 2.0)
                     ey = (target_face["center"][1] - img_h / 2.0) / (img_h / 2.0)
                     half_fov = math.radians(_H_FOV_DEG / 2.0)
-                    yaw = self._current[5]
-                    pitch = self._current[4]
+                    yaw = yaw_at_grab
+                    pitch = pitch_at_grab
                     if abs(ex) > _DEADBAND:
                         yaw += _GAIN * (-ex * half_fov)   # image-right = -yaw
                     if abs(ey) > _DEADBAND:
@@ -403,12 +480,14 @@ class FaceTracker:
                     self._target = ((0.0, 0.0, 0.0, 0.0, pitch, yaw), _PURSUE_RATE)
                 else:
                     doa = self._doa
-                    if (user_speaking and doa["conf"] > 0.2
-                            and now - doa["ts"] < _DOA_FRESH_SECS):
-                        # no face visible: turn toward the voice
-                        yaw = max(-max_yaw, min(max_yaw, math.radians(doa["az_deg"])))
+                    if doa["conf"] > 0.2 and now - doa["ts"] < _DOA_FRESH_SECS:
+                        # no face visible: turn toward the voice. DOA is
+                        # head-relative at read time, so it too is an
+                        # increment on the grab-time snapshot.
+                        yaw = yaw_at_grab + math.radians(doa["az_deg"])
+                        yaw = max(-max_yaw, min(max_yaw, yaw))
                         self._target = ((0.0, 0.0, 0.0, 0.0,
-                                         self._current[4], yaw), _PURSUE_RATE)
+                                         pitch_at_grab, yaw), _PURSUE_RATE)
                     elif now - self._last_face_seen > _HOLD_SECS:
                         self._target_track = None
                         self._target = ((0.0,) * 6, _RECENTER_RATE)
@@ -421,6 +500,8 @@ class FaceTracker:
                     "user_speaking": user_speaking,
                     "target": None if target_face is None else {
                         "track": target_face["track_id"],
+                        "bearing_deg": round(
+                            self._face_bearing_deg(target_face, img_w), 1),
                         "mouth_ema": round(
                             self._tracks[target_face["track_id"]]["mouth_ema"], 1),
                     },
@@ -445,4 +526,13 @@ class FaceTracker:
         out = dict(self._telemetry)
         out["doa"] = ({"az_deg": round(doa["az_deg"], 1), "conf": round(doa["conf"], 2)}
                       if time.monotonic() - doa["ts"] < _DOA_FRESH_SECS else None)
+        out["doa_available"] = self._respeaker is not None
+        try:
+            mm = self.service.motion_manager
+            if mm is not None:
+                roll, pitch, yaw = mm.get_commanded_head_ypr()
+                out["head_deg"] = {"yaw": round(math.degrees(yaw), 1),
+                                   "pitch": round(math.degrees(pitch), 1)}
+        except Exception:
+            pass
         return out

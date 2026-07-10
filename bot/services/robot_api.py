@@ -97,9 +97,12 @@ OPTIONAL_TOOLS: dict[str, dict] = {
             "fps": {"label": "Detection rate", "unit": "fps",
                     "value": float(os.getenv("FACE_TRACK_FPS", "8")),
                     "min": 2, "max": 15},
-            "max_yaw_deg": {"label": "Max head turn", "unit": "°",
-                            "value": float(os.getenv("FACE_TRACK_MAX_YAW_DEG", "20")),
-                            "min": 5, "max": 28},
+            # past ~65° the daemon recruits the body rotation automatically
+            # (world-frame poses + automatic body yaw), so this is the full
+            # gaze range, not just the neck
+            "max_yaw_deg": {"label": "Max gaze turn", "unit": "°",
+                            "value": float(os.getenv("FACE_TRACK_MAX_YAW_DEG", "90")),
+                            "min": 5, "max": 150},
         },
     },
     "idle_animations": {
@@ -770,6 +773,9 @@ def _build_app() -> FastAPI:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (60, 160, 255), 1)
 
         label = f"{snap['detector']} | {len(snap['faces'])} face(s)"
+        body = snap.get("body_seed_deg", 0)
+        if abs(body) >= 2:
+            label += f" | body {body:+.0f}deg"
         if snap["suppressed"]:
             label += f" | paused: {snap['suppressed']}"
         cv2.putText(frame, label, (8, h - 8),

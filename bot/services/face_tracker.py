@@ -78,9 +78,18 @@ _GAIN = 0.8
 _DEADBAND = 0.05        # normalized image error below which we hold still
 _MAX_PITCH_RAD = 0.26   # ~15°; yaw limit is the max_yaw_deg panel param
 _PURSUE_RATE = 0.9      # rad/s slew while following a face
-_RECENTER_RATE = 0.35   # rad/s slew back to neutral (face lost / suppressed)
+_RECENTER_RATE = 0.25   # rad/s slew back to neutral (gentle across wide yaw)
 _HOLD_SECS = 1.5        # keep last offsets this long after losing all faces
 _TRACK_TTL = 1.0        # seconds before an unmatched track is dropped
+
+# Body comfort seed: the daemon keeps the camera on the commanded world
+# pose regardless of body_yaw (automatic body yaw), so this seed only
+# re-postures the base under the gaze — it physically cannot disturb
+# tracking, it just unwinds the neck by bringing the body around.
+_BODY_SEED_DEADBAND = 0.26   # rad (~15°) of gaze yaw before the base follows
+_BODY_SEED_RATE = 0.25       # rad/s chase toward the gaze yaw
+_BODY_SEED_HOME_RATE = 0.15  # rad/s ease back when the gaze recenters
+_BODY_SEED_MAX = 2.4         # rad; the solver itself caps body at 160°
 
 # Target-selection weights (fusion lives here; DOA joins in via set_doa)
 _W_SIZE = 1.0
@@ -105,6 +114,11 @@ class FaceTracker:
         # owned by the move worker (single caller of the poll)
         self._current = [0.0] * 6
         self._last_poll = 0.0
+        # body comfort seed (poll-thread owned) + mode set by the worker:
+        # "track" chases the gaze yaw, "hold" freezes during animations,
+        # "home" eases back to zero when tracking is off
+        self._body_seed = 0.0
+        self._seed_mode = "home"
 
         self._detector = None
         self._detector_kind = "none"
@@ -166,7 +180,33 @@ class FaceTracker:
                 cur[i] -= step
             else:
                 cur[i] = target[i]
+
+        # body comfort seed integrator (same thread, same dt): chase the
+        # gaze yaw so the base comes around and the neck unwinds
+        mode = self._seed_mode
+        seed = self._body_seed
+        if mode == "track" and abs(cur[5]) > _BODY_SEED_DEADBAND:
+            goal, rate_s = cur[5], _BODY_SEED_RATE
+        elif mode == "hold":
+            goal, rate_s = seed, 0.0
+        else:  # "home", or gaze back near center
+            goal, rate_s = 0.0, _BODY_SEED_HOME_RATE
+        step_s = rate_s * dt
+        delta_s = goal - seed
+        if delta_s > step_s:
+            seed += step_s
+        elif delta_s < -step_s:
+            seed -= step_s
+        else:
+            seed = goal
+        self._body_seed = max(-_BODY_SEED_MAX, min(_BODY_SEED_MAX, seed))
+
         return (cur[0], cur[1], cur[2], cur[3], cur[4], cur[5])
+
+    def get_body_yaw_seed(self) -> float:
+        """Body-yaw solver seed (radians), polled by MovementManager right
+        after get_face_tracking_offsets on the same thread."""
+        return self._body_seed
 
     # ------------------------------------------------------------- doa hook
 
@@ -413,7 +453,8 @@ class FaceTracker:
                 fps = max(1.0, tool_param("face_tracking", "fps"))
                 suppressed = self._suppression_reason()
                 if suppressed in ("off", "disconnected", "estop"):
-                    # fully dormant: no grabs, offsets ramp home
+                    # fully dormant: no grabs, offsets and body seed ramp home
+                    self._seed_mode = "home"
                     self._target = ((0.0,) * 6, _RECENTER_RATE)
                     self._telemetry = {"faces": 0, "target": None,
                                        "suppressed": suppressed,
@@ -467,9 +508,14 @@ class FaceTracker:
 
                 max_yaw = math.radians(tool_param("face_tracking", "max_yaw_deg"))
                 if suppressed == "animation":
-                    # yield the stage but keep tracks warm for the resume
-                    self._target = ((0.0,) * 6, _RECENTER_RATE)
+                    # HOLD the current gaze while a clip plays (a nod should
+                    # happen facing the person, not swing home and back);
+                    # tracks stay warm for the resume. Stale read of the
+                    # poll-owned list is fine — it converges instantly.
+                    self._seed_mode = "hold"
+                    self._target = (tuple(self._current), _PURSUE_RATE)
                 elif target_face is not None:
+                    self._seed_mode = "track"
                     self._last_face_seen = now
                     self._target_track = target_face["track_id"]
                     ex = (target_face["center"][0] - img_w / 2.0) / (img_w / 2.0)
@@ -485,6 +531,7 @@ class FaceTracker:
                     pitch = max(-_MAX_PITCH_RAD, min(_MAX_PITCH_RAD, pitch))
                     self._target = ((0.0, 0.0, 0.0, 0.0, pitch, yaw), _PURSUE_RATE)
                 else:
+                    self._seed_mode = "track"
                     doa = self._doa
                     if doa["conf"] > 0.2 and now - doa["ts"] < _DOA_FRESH_SECS:
                         # no face visible: turn toward the voice. DOA is
@@ -513,6 +560,7 @@ class FaceTracker:
                     },
                     "offsets_deg": {"yaw": round(math.degrees(self._current[5]), 1),
                                     "pitch": round(math.degrees(self._current[4]), 1)},
+                    "body_seed_deg": round(math.degrees(self._body_seed), 1),
                 }
 
                 # overlay snapshot for the panel stream: fresh structures
@@ -537,6 +585,7 @@ class FaceTracker:
                             if doa_fresh else None),
                     "suppressed": suppressed,
                     "detector": self._detector_kind,
+                    "body_seed_deg": round(math.degrees(self._body_seed), 1),
                 }
             except Exception as e:
                 logger.warning(f"face tracker cycle failed: {e}")
@@ -568,6 +617,14 @@ class FaceTracker:
                 roll, pitch, yaw = mm.get_commanded_head_ypr()
                 out["head_deg"] = {"yaw": round(math.degrees(yaw), 1),
                                    "pitch": round(math.degrees(pitch), 1)}
+        except Exception:
+            pass
+        try:
+            # actual base rotation: joint[0] of the head chain (radians)
+            robot = self.service.robot
+            if robot is not None:
+                joints, _ = robot.get_current_joint_positions()
+                out["body_deg"] = round(math.degrees(float(joints[0])), 1)
         except Exception:
             pass
         return out

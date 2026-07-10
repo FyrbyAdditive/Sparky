@@ -58,16 +58,24 @@ logger = logging.getLogger(__name__)
 CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
 
 # Hard bounds on the SUMMED secondary offsets (speech + face + texture),
-# applied in _get_secondary_pose. The daemon does not clamp: an
-# unreachable composed pose raises in IK and the robot silently holds
-# its last pose, so saturating here converts "offsets too big" from a
-# motion stall into graceful clipping. Bounds sit inside the daemon's
-# reachable envelope with the primary pose near neutral (look_at uses
-# ±40° yaw / ±30° pitch as full deliberate turns).
+# applied in _get_secondary_pose. The daemon does not clamp translation/
+# roll/pitch: an unreachable composed pose raises in IK and the robot
+# silently holds its last pose, so saturating here converts "offsets too
+# big" from a motion stall into graceful clipping. Bounds sit inside the
+# daemon's reachable envelope with the primary pose near neutral.
+#
+# YAW is different: head poses are world-frame and the daemon runs
+# AnalyticalKinematics(automatic_body_yaw=True), which MODULATES on the
+# yaw axis — it recruits the body_rotation joint automatically once the
+# requested world yaw exceeds the Stewart platform's ±65° relative range
+# (bounded ±160° absolute body). Wide yaw is therefore safe and is what
+# lets face tracking follow people around the robot; 2.0 rad keeps a
+# margin under the solver's own caps.
 SECONDARY_MAX_XYZ_M = 0.03          # per-axis translation
 SECONDARY_MAX_ROLL_RAD = 0.20       # ~11°
 SECONDARY_MAX_PITCH_RAD = 0.35      # ~20°
-SECONDARY_MAX_YAW_RAD = 0.50        # ~29°
+SECONDARY_MAX_YAW_RAD = 2.0         # ~115°; body auto-recruited past ~65°
+SECONDARY_MAX_BODY_RAD = 2.4        # body-yaw SEED bound (solver caps at 160°)
 
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
@@ -211,6 +219,10 @@ class MovementState:
         0.0,
         0.0,
     )
+    # body-yaw solver seed from the face tracker (radians). Under
+    # automatic_body_yaw this re-postures the base without moving the
+    # camera off the commanded world head pose.
+    face_body_yaw: float = 0.0
 
     # Status flags
     last_primary_pose: FullBodyPose | None = None
@@ -636,6 +648,8 @@ class MovementManager:
         speech = self.state.speech_offsets
         face = self.state.face_tracking_offsets
         texture = self.state.texture_offsets
+        body_yaw = max(-SECONDARY_MAX_BODY_RAD,
+                       min(SECONDARY_MAX_BODY_RAD, self.state.face_body_yaw))
         secondary_offsets = [
             speech[0] + face[0] + texture[0],
             speech[1] + face[1] + texture[1],
@@ -645,7 +659,7 @@ class MovementManager:
             speech[5] + face[5] + texture[5],
         ]
 
-        if not any(secondary_offsets):
+        if not any(secondary_offsets) and body_yaw == 0.0:
             return None
 
         for i in range(3):
@@ -668,7 +682,7 @@ class MovementManager:
             degrees=False,
             mm=False,
         )
-        return (secondary_head_pose, (0.0, 0.0), 0.0)
+        return (secondary_head_pose, (0.0, 0.0), body_yaw)
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:
         """Compose primary and secondary poses into a single command pose.
@@ -687,6 +701,7 @@ class MovementManager:
                 self.state.speech_offsets,
                 self.state.face_tracking_offsets,
                 self.state.texture_offsets,
+                self.state.face_body_yaw,
             )
             if self._pose_cache is not None and self._pose_cache_key == key:
                 return self._pose_cache
@@ -831,9 +846,15 @@ class MovementManager:
             # Get face tracking offsets from camera worker thread
             offsets = self.camera_worker.get_face_tracking_offsets()
             self.state.face_tracking_offsets = offsets
+            # optional extension of the contract: a body-yaw solver seed
+            # so the base follows the gaze (posture only — the daemon's
+            # automatic body yaw keeps the camera on the world pose)
+            seed_fn = getattr(self.camera_worker, "get_body_yaw_seed", None)
+            self.state.face_body_yaw = float(seed_fn()) if seed_fn else 0.0
         else:
             # No camera worker, use neutral offsets
             self.state.face_tracking_offsets = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            self.state.face_body_yaw = 0.0
 
     def start(self) -> None:
         """Start the worker thread that drives the 100 Hz control loop."""

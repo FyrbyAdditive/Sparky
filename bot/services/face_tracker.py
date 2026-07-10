@@ -126,6 +126,8 @@ class FaceTracker:
 
         # telemetry for /status.tracking
         self._telemetry: dict = {"faces": 0, "target": None, "suppressed": "off"}
+        # per-cycle overlay snapshot for the panel stream (atomic swaps)
+        self._detections: dict | None = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -416,6 +418,10 @@ class FaceTracker:
                     self._telemetry = {"faces": 0, "target": None,
                                        "suppressed": suppressed,
                                        "detector": self._detector_kind}
+                    self._detections = {"ts": time.monotonic(), "frame_w": 0,
+                                        "frame_h": 0, "faces": [], "doa": None,
+                                        "suppressed": suppressed,
+                                        "detector": self._detector_kind}
                     if self._stop_event.wait(1.0):
                         break
                     continue
@@ -508,6 +514,30 @@ class FaceTracker:
                     "offsets_deg": {"yaw": round(math.degrees(self._current[5]), 1),
                                     "pitch": round(math.degrees(self._current[4]), 1)},
                 }
+
+                # overlay snapshot for the panel stream: fresh structures
+                # only (never expose _tracks — it mutates in place), swapped
+                # atomically like _telemetry
+                doa = self._doa
+                doa_fresh = (doa["conf"] > 0.2
+                             and now - doa["ts"] < _DOA_FRESH_SECS)
+                self._detections = {
+                    "ts": now,
+                    "frame_w": img_w,
+                    "frame_h": img_h,
+                    "faces": [{
+                        "box": face["box"],
+                        "mouth": face["mouth"],
+                        "track_id": face["track_id"],
+                        "is_target": target_face is not None
+                                     and face["track_id"] == target_face["track_id"],
+                        "mouth_ema": self._tracks[face["track_id"]]["mouth_ema"],
+                    } for face in faces],
+                    "doa": ({"az_deg": doa["az_deg"], "conf": doa["conf"]}
+                            if doa_fresh else None),
+                    "suppressed": suppressed,
+                    "detector": self._detector_kind,
+                }
             except Exception as e:
                 logger.warning(f"face tracker cycle failed: {e}")
                 self._target = ((0.0,) * 6, _RECENTER_RATE)
@@ -520,6 +550,11 @@ class FaceTracker:
         logger.info("Face tracker stopped")
 
     # ------------------------------------------------------------ telemetry
+
+    def detections(self) -> dict | None:
+        """Latest per-cycle detection snapshot (panel overlay). May be None
+        or stale — consumers check the ts field."""
+        return self._detections
 
     def status(self) -> dict:
         doa = self._doa

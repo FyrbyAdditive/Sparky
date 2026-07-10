@@ -87,15 +87,13 @@ def _downscale(frame_bgr):
     return frame_bgr
 
 
-def grab_rgb():
-    """One-shot RGB grab for the vision path: (bytes, (w, h)) or None.
+def grab_bgr():
+    """One downscaled BGR numpy frame (fresh — stale frames drained), or None.
 
     Only the VideoCapture handle needs mutual exclusion — pixel work
     (convert/copy) happens outside the lock so the panel's MJPEG stream
-    isn't stalled behind a vision grab (and vice versa).
+    isn't stalled behind a vision or tracker grab (and vice versa).
     """
-    import cv2
-
     with _lock:
         # Drain a couple of stale frames so the answer reflects "now"
         if _open_locked():
@@ -104,7 +102,16 @@ def grab_rgb():
         frame_bgr = _read_frame_locked()
     if frame_bgr is None:
         return None
-    frame_bgr = _downscale(frame_bgr)
+    return _downscale(frame_bgr)
+
+
+def grab_rgb():
+    """One-shot RGB grab for the vision path: (bytes, (w, h)) or None."""
+    import cv2
+
+    frame_bgr = grab_bgr()
+    if frame_bgr is None:
+        return None
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     h, w = frame_rgb.shape[:2]
     return frame_rgb.tobytes(), (w, h)

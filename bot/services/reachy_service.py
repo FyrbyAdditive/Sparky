@@ -53,6 +53,7 @@ class ReachyService:
         self.robot = None
         self.motion_manager = None
         self.wobbler = None
+        self.face_tracker = None
         self.connected = False
         self.animations = AnimationLibrary()
         # random horizontal mirroring of non-directional clips (variety)
@@ -140,16 +141,21 @@ class ReachyService:
                 except Exception as e:
                     logger.warning(f"Wake-up sequence failed (continuing): {e}")
 
-            # 1. Initialize Motor Cortex (Background Thread)
-            self.motion_manager = MovementManager(self.robot)
-            self.motion_manager.start()
+            # 1. Initialize Visual Cortex (camera worker polled by the motion loop)
+            from .face_tracker import FaceTracker
+            self.face_tracker = FaceTracker(self)
 
-            # 2. Initialize Auditory Cortex (Links Audio -> Motion)
+            # 2. Initialize Motor Cortex (Background Thread)
+            self.motion_manager = MovementManager(self.robot, camera_worker=self.face_tracker)
+            self.motion_manager.start()
+            self.face_tracker.start()
+
+            # 3. Initialize Auditory Cortex (Links Audio -> Motion)
             self.wobbler = HeadWobbler(self.motion_manager.set_speech_offsets)
             self.wobbler.start()
 
             self.connected = True
-            logger.info("Reachy Service Started: Breathing & Sway active.")
+            logger.info("Reachy Service Started: Breathing, Sway & Face Tracking active.")
         except Exception as e:
             import traceback
             logger.warning(f"Reachy Mini daemon not available: {e}")
@@ -262,6 +268,8 @@ class ReachyService:
         logger.info("Disconnecting Reachy service...")
 
         # Stop background threads
+        if self.face_tracker:
+            self.face_tracker.stop()
         if self.motion_manager:
             self.motion_manager.stop()
         if self.wobbler:
@@ -280,6 +288,7 @@ class ReachyService:
         self.robot = None
         self.motion_manager = None
         self.wobbler = None
+        self.face_tracker = None
         self.connected = False
 
         logger.info("Reachy service disconnected")

@@ -76,6 +76,19 @@ OPTIONAL_TOOLS: dict[str, dict] = {
         "description": "Keep gently animating while Sparky talks through longer replies.",
         "enabled": os.getenv("SPEAKING_ANIMATIONS_ENABLED", "1").strip() != "0",
     },
+    "face_tracking": {
+        "label": "Face tracking",
+        "description": "Follow faces with the head; lock onto whoever is speaking.",
+        "enabled": os.getenv("FACE_TRACKING_ENABLED", "1").strip() != "0",
+        "params": {
+            "fps": {"label": "Detection rate", "unit": "fps",
+                    "value": float(os.getenv("FACE_TRACK_FPS", "8")),
+                    "min": 2, "max": 15},
+            "max_yaw_deg": {"label": "Max head turn", "unit": "°",
+                            "value": float(os.getenv("FACE_TRACK_MAX_YAW_DEG", "20")),
+                            "min": 5, "max": 28},
+        },
+    },
     "idle_animations": {
         "label": "Idle animations",
         "description": "Play a gentle animation now and then when Sparky is idle.",
@@ -174,6 +187,15 @@ def _camera_state() -> dict:
     try:
         from .camera_service import CAMERA, CAMERA_RESOLUTIONS
         return {"resolution": CAMERA["resolution"], "options": CAMERA_RESOLUTIONS}
+    except Exception:
+        return {}
+
+
+def _tracking_status() -> dict:
+    try:
+        from .reachy_service import ReachyService
+        tracker = ReachyService.get_instance().face_tracker
+        return tracker.status() if tracker else {}
     except Exception:
         return {}
 
@@ -528,6 +550,7 @@ def _build_app() -> FastAPI:
             "tools": OPTIONAL_TOOLS,
             "camera": _camera_state(),
             "animation": _director_status(),
+            "tracking": _tracking_status(),
             "voice": {"voice": VOICE["voice"],
                       "options": await _kokoro_voices()},
             "models": {

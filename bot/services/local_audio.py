@@ -52,7 +52,10 @@ AUDIO_STATS = {
 # audio while gated so the robot's own speech never reaches the transport's
 # VAD (frame-dropping later in the pipeline is too late — VAD runs in the
 # transport and its UserStartedSpeaking would interrupt the reply mid-word).
-GATE = {"bot_speaking": False, "tail_until": 0.0, "muted": False}
+GATE = {"bot_speaking": False, "tail_until": 0.0, "muted": False,
+        # VAD-tracked user speech, written by ReachyWobblerProcessor; read
+        # by the ambient motion layers (texture states, speaker association)
+        "user_speaking": False, "user_stopped_ts": 0.0}
 
 # Speaker volume as software gain applied to every outgoing sample —
 # works identically on macOS and Linux (pactl only existed on the Sparks
